@@ -1,0 +1,137 @@
+:root {
+  --font: -apple-system, system-ui, sans-serif;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-num: 22px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-pill: 999px;
+
+  --ink: #1F1E1D;
+  --ink-2: #5E5D59;
+  --ink-3: #6B6A66;
+  --surface: rgba(255, 255, 255, .55);
+  --hairline: rgba(31, 30, 29, .10);
+  --track: rgba(31, 30, 29, .08);
+  --accent: #D97757;
+  --accent-strong: #A84A28;
+  --on-accent: #fff;
+  --ok: #6B6A66;
+  --warn: #8F5E14;
+  --crit: #B4432D;
+  --focus: 0 0 0 3px rgba(217, 119, 87, .45);
+  --dur: 180ms;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #F0EEE6;
+    --ink-2: #B8B5AC;
+    --ink-3: #A8A59C;
+    --surface: rgba(255, 255, 255, .06);
+    --hairline: rgba(255, 255, 255, .10);
+    --track: rgba(255, 255, 255, .10);
+    --accent-strong: #E8957A;
+    --on-accent: #1F1E1D;
+    --ok: #B8B5AC;
+    --warn: #E0A44A;
+    --crit: #EC8A72;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  background: transparent;
+}
+
+body {
+  font-family: var(--font);
+  font-size: var(--fs-md);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .92em;
+  padding: 1px var(--sp-1);
+  border-radius: 4px;
+  background: var(--track);
+}
+
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+.btn {
+  height: 24px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--dur) var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--track);
+}
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent-strong);
+  color: var(--on-accent);
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  filter: brightness(1.08);
+}
+
+.btn:disabled {
+  opacity: .5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

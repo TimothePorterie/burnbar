@@ -2,157 +2,86 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com https://console.anthropic.com; object-src 'none'; base-uri 'self'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com https://console.anthropic.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Claude Bar</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="popup-container">
-      <!-- Header with user info -->
-      <div class="header" id="header">
-        <div class="user-info">
+    <main class="popup" id="popup" aria-busy="true">
+      <header class="header" id="header">
+        <div class="identity">
           <span class="user-name" id="userName" data-i18n="popup.loading">Loading...</span>
-          <span class="badge" id="subscriptionBadge">Pro</span>
+          <span class="plan" id="subscriptionBadge" hidden></span>
         </div>
-        <button class="refresh-btn" id="refreshBtn" data-i18n-title="popup.refresh" title="Refresh">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <button class="icon-btn" id="refreshBtn" data-i18n-title="popup.refresh" title="Refresh">
+          <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 4v6h-6M1 20v-6h6"/>
             <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
         </button>
-      </div>
+      </header>
 
-      <!-- Loading skeleton -->
-      <div class="skeleton-container" id="skeletonContainer">
-        <div class="skeleton-card">
-          <div class="skeleton-header">
-            <div class="skeleton skeleton-title"></div>
-            <div class="skeleton skeleton-value"></div>
-          </div>
-          <div class="skeleton skeleton-progress"></div>
-          <div class="skeleton-footer">
-            <div class="skeleton skeleton-label"></div>
-            <div class="skeleton skeleton-reset"></div>
-          </div>
-        </div>
-        <div class="skeleton-card">
-          <div class="skeleton-header">
-            <div class="skeleton skeleton-title"></div>
-            <div class="skeleton skeleton-value"></div>
-          </div>
-          <div class="skeleton skeleton-progress"></div>
-          <div class="skeleton-footer">
-            <div class="skeleton skeleton-label"></div>
-            <div class="skeleton skeleton-reset"></div>
-          </div>
+      <div class="alert" id="errorSection" role="alert" hidden>
+        <p class="selectable" id="errorMessage"></p>
+        <p class="alert-guidance selectable" id="errorGuidance"></p>
+        <div class="alert-actions">
+          <button class="btn" id="errorRetryBtn" data-i18n="popup.retry">Retry</button>
+          <button class="btn primary" id="errorLoginBtn" data-i18n="popup.login" hidden>Log In</button>
         </div>
       </div>
 
-      <!-- Quota cards -->
-      <div class="quota-cards" id="quotaCards" style="display: none;">
-        <!-- 5-hour session quota -->
-        <div class="quota-card" id="fiveHourCard">
-          <div class="quota-header">
-            <span class="quota-title" data-i18n="popup.session">Session (5h)</span>
-            <span class="quota-value" id="fiveHourValue">--%</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="fiveHourProgress"></div>
-          </div>
-          <div class="quota-footer">
-            <span class="reset-label" data-i18n="popup.resetsIn">Resets in</span>
-            <span class="reset-value" id="fiveHourReset">--</span>
-          </div>
-          <div class="reset-progress-bar">
-            <div class="reset-progress-fill" id="fiveHourResetProgress"></div>
-          </div>
-        </div>
-
-        <!-- 7-day weekly quota -->
-        <div class="quota-card" id="sevenDayCard">
-          <div class="quota-header">
-            <span class="quota-title" data-i18n="popup.weekly">Weekly (7d)</span>
-            <span class="quota-value" id="sevenDayValue">--%</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="sevenDayProgress"></div>
-          </div>
-          <div class="quota-footer">
-            <span class="reset-label" data-i18n="popup.resetsIn">Resets in</span>
-            <span class="reset-value" id="sevenDayReset">--</span>
-          </div>
-          <div class="reset-progress-bar">
-            <div class="reset-progress-fill" id="sevenDayResetProgress"></div>
-          </div>
-        </div>
-
-        <!-- Opus weekly quota (Max plans only) -->
-        <div class="quota-card" id="opusCard" style="display: none;">
-          <div class="quota-header">
-            <span class="quota-title" data-i18n="popup.opus">Opus (7d)</span>
-            <span class="quota-value" id="opusValue">--%</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" id="opusProgress"></div>
-          </div>
-          <div class="quota-footer">
-            <span class="reset-label" data-i18n="popup.resetsIn">Resets in</span>
-            <span class="reset-value" id="opusReset">--</span>
-          </div>
-          <div class="reset-progress-bar">
-            <div class="reset-progress-fill" id="opusResetProgress"></div>
-          </div>
-        </div>
-
-        <!-- Extra usage / overage info -->
-        <div class="extra-usage" id="extraUsage" style="display: none;">
-          <span class="extra-usage-label" data-i18n="popup.overage">Overage</span>
-          <span class="extra-usage-value" id="extraUsageValue">--</span>
-        </div>
+      <div class="skeleton" id="skeletonContainer" aria-hidden="true">
+        <div class="skeleton-row"><span></span><span></span><span></span></div>
+        <div class="skeleton-row"><span></span><span></span><span></span></div>
       </div>
 
-      <!-- Toast -->
-      <div class="toast" id="toast"></div>
-
-      <!-- Footer -->
-      <div class="footer" id="footer" style="display: none;">
-        <span class="last-updated" id="lastUpdated">Last updated: --</span>
-      </div>
-
-      <!-- Error state -->
-      <div class="error-section" id="errorSection" style="display: none;">
-        <div class="error-icon" id="errorIcon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M12 8v4M12 16h.01"/>
-          </svg>
-        </div>
-        <div class="error-content">
-          <span class="error-message" id="errorMessage" data-i18n="error.loading">Error loading quota</span>
-          <span class="error-guidance" id="errorGuidance"></span>
-          <div class="error-actions">
-            <button class="error-retry-btn" id="errorRetryBtn" data-i18n="popup.retry">Retry</button>
-            <button class="error-login-btn" id="errorLoginBtn" style="display: none;" data-i18n="popup.login">Log In</button>
+      <section class="quotas" id="quotaCards" hidden>
+        <div class="quota" id="fiveHour">
+          <div class="quota-head">
+            <span class="quota-label" id="fiveHourLabel" data-i18n="popup.session">Session (5h)</span>
+            <span class="quota-value">--%</span>
           </div>
+          <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="fiveHourLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+          <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
         </div>
-      </div>
 
-      <!-- Not connected state -->
-      <div class="not-connected" id="notConnected" style="display: none;">
-        <div class="not-connected-icon">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M12 8v4M12 16h.01"/>
-          </svg>
+        <div class="quota" id="sevenDay">
+          <div class="quota-head">
+            <span class="quota-label" id="sevenDayLabel" data-i18n="popup.weekly">Weekly (7d)</span>
+            <span class="quota-value">--%</span>
+          </div>
+          <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="sevenDayLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+          <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
         </div>
-        <h3 data-i18n="popup.notConnected">Not Connected</h3>
+
+        <div class="quota compact" id="opus" hidden>
+          <span class="quota-label" id="opusLabel" data-i18n="popup.opus">Opus (7d)</span>
+          <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="opusLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+          <span class="quota-level"></span>
+          <span class="quota-value">--%</span>
+        </div>
+
+        <div class="extra" id="extraUsage" hidden>
+          <span class="quota-label" data-i18n="popup.overage">Overage</span>
+          <span class="extra-value" id="extraUsageValue">--</span>
+        </div>
+      </section>
+
+      <footer class="footer" id="footer" hidden>
+        <span id="lastUpdated"></span>
+        <button class="link" id="settingsLink" data-i18n="popup.settings">Settings</button>
+      </footer>
+
+      <div class="empty" id="notConnected" hidden>
+        <h1 data-i18n="popup.notConnected">Not Connected</h1>
         <p data-i18n="popup.notConnectedDesc">Log in to monitor your Claude Code quotas</p>
-        <button class="popup-login-btn" id="popupLoginBtn" data-i18n="popup.login">Log In</button>
-        <p class="not-connected-hint"><span data-i18n="popup.cliHint">Or via CLI:</span> <code>claude login</code></p>
+        <button class="btn primary" id="popupLoginBtn" data-i18n="popup.login">Log In</button>
+        <p class="empty-hint"><span data-i18n="popup.cliHint">Or via CLI:</span> <code>claude login</code></p>
       </div>
 
-    </div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </main>
     <script type="module" src="./renderer.ts"></script>
   </body>
 </html>

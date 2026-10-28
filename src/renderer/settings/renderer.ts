@@ -3,88 +3,95 @@ import type { Locale } from '../../shared/i18n'
 import { t, setLocale, applyI18n } from '../../shared/i18n'
 
 // DOM elements
-const connectionStatus = document.getElementById('connectionStatus') as HTMLElement
 const statusIndicator = document.getElementById('statusIndicator') as HTMLElement
 const statusText = document.getElementById('statusText') as HTMLElement
 const statusEmail = document.getElementById('statusEmail') as HTMLElement
 const logoutBtn = document.getElementById('logoutBtn') as HTMLButtonElement
-const notConnectedHelp = document.getElementById('notConnectedHelp') as HTMLElement
 const loginBtn = document.getElementById('loginBtn') as HTMLButtonElement
+const cliHint = document.getElementById('cliHint') as HTMLElement
 const authCodeSection = document.getElementById('authCodeSection') as HTMLElement
 const authCodeInput = document.getElementById('authCodeInput') as HTMLInputElement
 const validateBtn = document.getElementById('validateBtn') as HTMLButtonElement
 const cancelLoginBtn = document.getElementById('cancelLoginBtn') as HTMLButtonElement
 const authError = document.getElementById('authError') as HTMLElement
 const language = document.getElementById('language') as HTMLSelectElement
-const authMode = document.getElementById('authMode') as HTMLSelectElement
-const refreshInterval = document.getElementById('refreshInterval') as HTMLSelectElement
 const enableNotifications = document.getElementById('enableNotifications') as HTMLInputElement
 const launchAtLogin = document.getElementById('launchAtLogin') as HTMLInputElement
 
-function showConnectedUI(email: string): void {
-  connectionStatus.style.display = 'flex'
-  statusIndicator.classList.add('connected')
-  statusText.textContent = t('settings.connected')
-  statusEmail.textContent = email
-  // CLI credentials belong to Claude Code — logout happens there
-  logoutBtn.style.display = authMode.value === 'app' ? 'block' : 'none'
-  notConnectedHelp.style.display = 'none'
-  authCodeSection.style.display = 'none'
-}
+let authMode: 'app' | 'cli' = 'app'
 
-function showNotConnectedUI(): void {
-  connectionStatus.style.display = 'flex'
-  statusIndicator.classList.remove('connected')
-  statusText.textContent = t('settings.notConnected')
-  logoutBtn.style.display = 'none'
-  authCodeSection.style.display = 'none'
-  if (authMode.value === 'cli') {
-    statusEmail.textContent = t('settings.cliHint')
-    notConnectedHelp.style.display = 'none'
-  } else {
-    statusEmail.textContent = t('settings.noCredentials')
-    notConnectedHelp.style.display = 'block'
-    loginBtn.style.display = 'inline-block'
+const ARROW_STEPS: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+
+// ARIA radiogroup: click or arrow keys select, roving tabindex
+function segmented(group: HTMLElement, onChange: (value: string) => void): (value: string) => void {
+  const radios = Array.from(group.querySelectorAll<HTMLButtonElement>('[role="radio"]'))
+  const select = (value: string): void => {
+    for (const radio of radios) {
+      const on = radio.dataset.value === value
+      radio.setAttribute('aria-checked', String(on))
+      radio.tabIndex = on ? 0 : -1
+    }
   }
+  radios.forEach((radio, i) => {
+    radio.addEventListener('click', () => {
+      if (radio.getAttribute('aria-checked') === 'true') return
+      select(radio.dataset.value!)
+      onChange(radio.dataset.value!)
+    })
+    radio.addEventListener('keydown', (e) => {
+      const step = ARROW_STEPS[e.key]
+      if (!step) return
+      e.preventDefault()
+      const next = radios[(i + step + radios.length) % radios.length]
+      next.focus()
+      next.click()
+    })
+  })
+  return select
 }
 
-function showWaitingForCodeUI(): void {
-  notConnectedHelp.style.display = 'none'
-  authCodeSection.style.display = 'block'
-  authCodeInput.value = ''
-  authError.style.display = 'none'
-  authCodeInput.focus()
+// Renders `code` spans from backtick-delimited translations
+function setRichText(el: HTMLElement, text: string): void {
+  el.replaceChildren(...text.split('`').map((part, i) => {
+    if (i % 2 === 0) return part
+    const code = document.createElement('code')
+    code.textContent = part
+    return code
+  }))
+}
+
+function showAccount(connected: boolean, detail: string): void {
+  statusIndicator.classList.toggle('connected', connected)
+  statusText.textContent = t(connected ? 'settings.connected' : 'settings.notConnected')
+  statusEmail.textContent = detail
+  // CLI credentials belong to Claude Code — login/logout happen there
+  logoutBtn.hidden = !connected || authMode === 'cli'
+  loginBtn.hidden = connected || authMode === 'cli' || !authCodeSection.hidden
+  cliHint.hidden = authMode !== 'cli'
 }
 
 async function loadConnectionStatus(): Promise<void> {
   try {
-    const hasCredentials = await window.claudeBar.hasCredentials()
-
-    if (hasCredentials) {
+    if (await window.claudeBar.hasCredentials()) {
+      authCodeSection.hidden = true
       const userInfo = await window.claudeBar.getUserInfo()
-      const email = userInfo?.email || userInfo?.name || t('settings.connected')
-      showConnectedUI(email)
+      showAccount(true, userInfo?.email || userInfo?.name || '')
     } else {
-      showNotConnectedUI()
+      showAccount(false, authMode === 'cli' ? '' : t('settings.noCredentials'))
     }
   } catch (error) {
     console.error('Failed to load connection status:', error)
-    statusIndicator.classList.remove('connected')
-    statusText.textContent = t('settings.error')
-    statusEmail.textContent = t('settings.credentialsError')
+    showAccount(false, t('settings.credentialsError'))
   }
 }
 
-async function loadSettings(): Promise<void> {
-  try {
-    const settings = await window.claudeBar.getSettings()
-    language.value = settings.language
-    refreshInterval.value = settings.refreshInterval.toString()
-    enableNotifications.checked = settings.enableNotifications
-    launchAtLogin.checked = settings.launchAtLogin
-  } catch (error) {
-    console.error('Failed to load settings:', error)
-  }
+function applyLocale(lang: Locale): void {
+  setLocale(lang)
+  applyI18n()
+  language.value = lang
+  setRichText(cliHint, t('settings.cliModeHint'))
+  loadConnectionStatus()
+  loadUpdateInfo()
 }
 
 // Event listeners
@@ -92,28 +99,26 @@ language.addEventListener('change', async () => {
   const lang = language.value as Locale
   try {
     await window.claudeBar.setLanguage(lang)
-    setLocale(lang)
-    applyI18n()
-    loadConnectionStatus()
-    loadUpdateInfo()
+    applyLocale(lang)
   } catch (error) {
     console.error('Failed to update language:', error)
   }
 })
 
-authMode.addEventListener('change', async () => {
+const selectAuthMode = segmented(document.getElementById('authMode')!, async (value) => {
+  authMode = value as 'app' | 'cli'
+  authCodeSection.hidden = true
   try {
-    await window.claudeBar.setAuthMode(authMode.value as 'app' | 'cli')
-    await loadConnectionStatus()
+    await window.claudeBar.setAuthMode(authMode)
   } catch (error) {
     console.error('Failed to update auth mode:', error)
   }
+  await loadConnectionStatus()
 })
 
-refreshInterval.addEventListener('change', async () => {
-  const seconds = parseInt(refreshInterval.value, 10)
+const selectRefreshInterval = segmented(document.getElementById('refreshInterval')!, async (value) => {
   try {
-    await window.claudeBar.setRefreshInterval(seconds)
+    await window.claudeBar.setRefreshInterval(parseInt(value, 10))
   } catch (error) {
     console.error('Failed to update refresh interval:', error)
   }
@@ -139,9 +144,12 @@ launchAtLogin.addEventListener('change', async () => {
 loginBtn.addEventListener('click', async () => {
   loginBtn.disabled = true
   try {
-    const started = await window.claudeBar.startLogin()
-    if (started) {
-      showWaitingForCodeUI()
+    if (await window.claudeBar.startLogin()) {
+      loginBtn.hidden = true
+      authCodeSection.hidden = false
+      authCodeInput.value = ''
+      authError.hidden = true
+      authCodeInput.focus()
     }
   } catch (error) {
     console.error('Failed to start login:', error)
@@ -155,7 +163,7 @@ validateBtn.addEventListener('click', async () => {
   if (!code) return
 
   validateBtn.disabled = true
-  authError.style.display = 'none'
+  authError.hidden = true
 
   try {
     const result = await window.claudeBar.submitAuthCode(code)
@@ -163,12 +171,12 @@ validateBtn.addEventListener('click', async () => {
       await loadConnectionStatus()
     } else {
       authError.textContent = result.error || t('error.authFailed')
-      authError.style.display = 'inline'
+      authError.hidden = false
     }
   } catch (error) {
     console.error('Failed to submit auth code:', error)
     authError.textContent = t('error.unexpected')
-    authError.style.display = 'inline'
+    authError.hidden = false
   } finally {
     validateBtn.disabled = false
   }
@@ -181,8 +189,8 @@ authCodeInput.addEventListener('keydown', (e) => {
 })
 
 cancelLoginBtn.addEventListener('click', () => {
-  authCodeSection.style.display = 'none'
-  notConnectedHelp.style.display = 'block'
+  authCodeSection.hidden = true
+  loginBtn.hidden = false
 })
 
 logoutBtn.addEventListener('click', async () => {
@@ -211,23 +219,24 @@ const appVersion = document.getElementById('appVersion') as HTMLElement
 
 function updateUpdateUI(state: { status: string; version?: string; progress?: number; error?: string }): void {
   checkUpdateBtn.disabled = false
-  checkUpdateBtn.style.display = ''
+  checkUpdateBtn.hidden = false
   installUpdateBtn.disabled = false
-  installUpdateBtn.style.display = 'none'
-  updateProgress.style.display = 'none'
+  installUpdateBtn.hidden = true
+  updateProgress.hidden = true
   updateProgress.classList.remove('indeterminate')
+  updateProgress.removeAttribute('aria-valuenow')
 
   switch (state.status) {
     case 'checking':
-      updateText.textContent = t('settings.checkUpdatesHint')
+      updateText.textContent = t('settings.checking')
       checkUpdateBtn.disabled = true
-      updateProgress.style.display = 'block'
+      updateProgress.hidden = false
       updateProgress.classList.add('indeterminate')
       break
     case 'available':
       updateText.textContent = t('settings.versionAvailable', { version: state.version ?? '' })
-      checkUpdateBtn.style.display = 'none'
-      installUpdateBtn.style.display = 'inline-block'
+      checkUpdateBtn.hidden = true
+      installUpdateBtn.hidden = false
       installUpdateBtn.textContent = t('settings.downloadInstall')
       break
     case 'not-available':
@@ -235,21 +244,22 @@ function updateUpdateUI(state: { status: string; version?: string; progress?: nu
       break
     case 'downloading':
       updateText.textContent = t('settings.downloading', { progress: state.progress ?? 0 })
-      checkUpdateBtn.style.display = 'none'
-      updateProgress.style.display = 'block'
+      checkUpdateBtn.hidden = true
+      updateProgress.hidden = false
+      updateProgress.setAttribute('aria-valuenow', String(state.progress ?? 0))
       updateProgressBar.style.width = `${state.progress ?? 0}%`
       break
     case 'downloaded':
       updateText.textContent = t('settings.versionReady', { version: state.version ?? '' })
-      checkUpdateBtn.style.display = 'none'
-      installUpdateBtn.style.display = 'inline-block'
+      checkUpdateBtn.hidden = true
+      installUpdateBtn.hidden = false
       installUpdateBtn.textContent = t('settings.installRestart')
       break
     case 'error':
       updateText.textContent = state.error || t('settings.updateFailed')
       break
     default:
-      updateText.textContent = t('settings.checkUpdatesHint')
+      updateText.textContent = ''
   }
 }
 
@@ -279,9 +289,7 @@ installUpdateBtn.addEventListener('click', async () => {
 })
 
 // Listen for update status changes
-window.claudeBar.onUpdateStatusChanged((state) => {
-  updateUpdateUI(state)
-})
+window.claudeBar.onUpdateStatusChanged(updateUpdateUI)
 
 // Load version and initial update state
 async function loadUpdateInfo(): Promise<void> {
@@ -296,18 +304,17 @@ async function loadUpdateInfo(): Promise<void> {
   }
 }
 
+window.claudeBar.onLanguageChanged(applyLocale)
+
 // Initialize locale then load
 async function init(): Promise<void> {
   const settings = await window.claudeBar.getSettings()
-  setLocale(settings.language as Locale)
-  applyI18n()
-  language.value = settings.language
-  authMode.value = settings.authMode
-  refreshInterval.value = settings.refreshInterval.toString()
+  authMode = settings.authMode
+  selectAuthMode(settings.authMode)
+  selectRefreshInterval(settings.refreshInterval.toString())
   enableNotifications.checked = settings.enableNotifications
   launchAtLogin.checked = settings.launchAtLogin
-  loadConnectionStatus()
-  loadUpdateInfo()
+  applyLocale(settings.language as Locale)
 }
 
 init()

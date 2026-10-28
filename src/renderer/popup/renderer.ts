@@ -1,9 +1,11 @@
 // Popup renderer script
 import type { Locale } from '../../shared/i18n'
-import { t, setLocale, applyI18n } from '../../shared/i18n'
-import type { QuotaError, QuotaInfo } from '../../shared/types'
+import { t, setLocale, getLocale, applyI18n } from '../../shared/i18n'
+import { WARNING_THRESHOLD, CRITICAL_THRESHOLD } from '../../shared/quota'
+import type { QuotaError, QuotaErrorType, QuotaInfo, QuotaPeriod } from '../../shared/types'
 
 // DOM elements
+const popup = document.getElementById('popup') as HTMLElement
 const header = document.getElementById('header') as HTMLElement
 const notConnected = document.getElementById('notConnected') as HTMLElement
 const quotaCards = document.getElementById('quotaCards') as HTMLElement
@@ -13,26 +15,11 @@ const userName = document.getElementById('userName') as HTMLElement
 const subscriptionBadge = document.getElementById('subscriptionBadge') as HTMLElement
 const refreshBtn = document.getElementById('refreshBtn') as HTMLButtonElement
 
-const fiveHourValue = document.getElementById('fiveHourValue') as HTMLElement
-const fiveHourProgress = document.getElementById('fiveHourProgress') as HTMLElement
-const fiveHourReset = document.getElementById('fiveHourReset') as HTMLElement
-
-const sevenDayValue = document.getElementById('sevenDayValue') as HTMLElement
-const sevenDayProgress = document.getElementById('sevenDayProgress') as HTMLElement
-const sevenDayReset = document.getElementById('sevenDayReset') as HTMLElement
-
-const fiveHourResetProgress = document.getElementById('fiveHourResetProgress') as HTMLElement
-const sevenDayResetProgress = document.getElementById('sevenDayResetProgress') as HTMLElement
-
-const opusCard = document.getElementById('opusCard') as HTMLElement
-const opusValue = document.getElementById('opusValue') as HTMLElement
-const opusProgress = document.getElementById('opusProgress') as HTMLElement
-const opusReset = document.getElementById('opusReset') as HTMLElement
-const opusResetProgress = document.getElementById('opusResetProgress') as HTMLElement
-
+const fiveHourRow = document.getElementById('fiveHour') as HTMLElement
+const sevenDayRow = document.getElementById('sevenDay') as HTMLElement
+const opusRow = document.getElementById('opus') as HTMLElement
 const extraUsageEl = document.getElementById('extraUsage') as HTMLElement
 const extraUsageValue = document.getElementById('extraUsageValue') as HTMLElement
-
 const lastUpdated = document.getElementById('lastUpdated') as HTMLElement
 
 // Error elements
@@ -42,33 +29,30 @@ const errorGuidance = document.getElementById('errorGuidance') as HTMLElement
 const errorRetryBtn = document.getElementById('errorRetryBtn') as HTMLButtonElement
 const errorLoginBtn = document.getElementById('errorLoginBtn') as HTMLButtonElement
 
-function getProgressClass(utilization: number): string {
-  if (utilization >= 90) return 'critical'
-  if (utilization >= 70) return 'warning'
-  return ''
+const GUIDANCE: Partial<Record<QuotaErrorType, string>> = {
+  auth: 'error.authGuidance',
+  network: 'error.networkGuidance',
+  rate_limit: 'error.rateLimitGuidance',
+  server: 'error.serverGuidance'
 }
 
-function showError(error: QuotaError): void {
+const PLANS: Record<string, string> = { pro: 'Pro', max: 'Max', team: 'Team', enterprise: 'Enterprise' }
+
+// Guidance only when no data is shown: inline, it repeats the message
+function showError(error: QuotaError, withGuidance = false): void {
+  const guidance = withGuidance ? GUIDANCE[error.type] : undefined
   errorMessage.textContent = error.message
-  errorGuidance.textContent = ''
-  errorLoginBtn.style.display = error.type === 'auth' ? 'inline-block' : 'none'
-  errorSection.classList.remove('standalone')
-  errorSection.style.display = 'flex'
-
-  if (error.retryable) {
-    errorSection.classList.add('warning')
-    errorSection.classList.remove('error')
-  } else {
-    errorSection.classList.remove('warning')
-  }
-
-  errorRetryBtn.style.display = error.retryable ? 'block' : 'none'
+  errorGuidance.textContent = guidance ? t(guidance) : ''
+  errorGuidance.hidden = !guidance
+  errorRetryBtn.hidden = error.type === 'auth'
+  errorLoginBtn.hidden = error.type !== 'auth'
+  errorSection.dataset.tone = error.retryable ? 'warn' : 'crit'
+  errorSection.hidden = false
   reportContentHeight()
 }
 
 function hideError(): void {
-  errorSection.style.display = 'none'
-  errorSection.classList.remove('standalone')
+  errorSection.hidden = true
   reportContentHeight()
 }
 
@@ -78,50 +62,44 @@ function formatCredits(cents: number, currency: string): string {
   return `${amount.toFixed(2)} ${currency.toUpperCase()}`
 }
 
-function updateQuotaDisplay(quota: QuotaInfo): void {
-  const fiveHourUtil = Math.round(quota.fiveHour.utilization)
-  fiveHourValue.textContent = `${fiveHourUtil}%`
-  fiveHourProgress.style.width = `${fiveHourUtil}%`
-  fiveHourProgress.className = `progress-fill ${getProgressClass(quota.fiveHour.utilization)}`
-  fiveHourReset.textContent = quota.fiveHour.resetsIn
-  fiveHourResetProgress.style.width = `${quota.fiveHour.resetProgress}%`
+function renderPeriod(row: HTMLElement, period: QuotaPeriod): void {
+  const value = Math.round(period.utilization)
+  const level = value >= CRITICAL_THRESHOLD ? 'crit' : value >= WARNING_THRESHOLD ? 'warn' : 'ok'
+  row.dataset.level = level
+  row.style.setProperty('--v', `${Math.min(100, Math.max(0, value))}%`)
+  row.style.setProperty('--pace', `${period.resetProgress}%`)
+  row.toggleAttribute('data-nopace', period.resetProgress <= 0)
+  row.querySelector('.meter')!.setAttribute('aria-valuenow', String(value))
+  row.querySelector('.quota-value')!.textContent = `${value}%`
 
-  const sevenDayUtil = Math.round(quota.sevenDay.utilization)
-  sevenDayValue.textContent = `${sevenDayUtil}%`
-  sevenDayProgress.style.width = `${sevenDayUtil}%`
-  sevenDayProgress.className = `progress-fill ${getProgressClass(quota.sevenDay.utilization)}`
-  sevenDayReset.textContent = quota.sevenDay.resetsIn
-  sevenDayResetProgress.style.width = `${quota.sevenDay.resetProgress}%`
+  const reset = t('popup.resetsIn', { time: period.resetsIn })
+  const resetEl = row.querySelector('.quota-reset')
+  if (resetEl) resetEl.textContent = reset
+  else row.title = reset
+  const levelEl = row.querySelector('.quota-level')
+  if (levelEl) levelEl.textContent = level === 'ok' ? '' : t(level === 'crit' ? 'popup.levelCrit' : 'popup.levelWarn')
+}
+
+function updateQuotaDisplay(quota: QuotaInfo): void {
+  renderPeriod(fiveHourRow, quota.fiveHour)
+  renderPeriod(sevenDayRow, quota.sevenDay)
 
   // Opus weekly quota (Max plans)
-  if (quota.sevenDayOpus) {
-    const opusUtil = Math.round(quota.sevenDayOpus.utilization)
-    opusValue.textContent = `${opusUtil}%`
-    opusProgress.style.width = `${opusUtil}%`
-    opusProgress.className = `progress-fill ${getProgressClass(quota.sevenDayOpus.utilization)}`
-    opusReset.textContent = quota.sevenDayOpus.resetsIn
-    opusResetProgress.style.width = `${quota.sevenDayOpus.resetProgress}%`
-    opusCard.style.display = 'block'
-  } else {
-    opusCard.style.display = 'none'
-  }
+  if (quota.sevenDayOpus) renderPeriod(opusRow, quota.sevenDayOpus)
+  opusRow.hidden = !quota.sevenDayOpus
 
   // Extra usage / overage
-  if (quota.extraUsage?.isEnabled) {
-    const used = formatCredits(quota.extraUsage.usedCredits, quota.extraUsage.currency)
-    if (quota.extraUsage.monthlyLimit > 0) {
-      const limit = formatCredits(quota.extraUsage.monthlyLimit, quota.extraUsage.currency)
-      extraUsageValue.textContent = `${used} / ${limit}`
-    } else {
-      extraUsageValue.textContent = `${used} ${t('popup.noLimit')}`
-    }
-    extraUsageEl.style.display = 'flex'
-  } else {
-    extraUsageEl.style.display = 'none'
+  const extra = quota.extraUsage
+  if (extra?.isEnabled) {
+    const used = formatCredits(extra.usedCredits, extra.currency)
+    extraUsageValue.textContent = extra.monthlyLimit > 0
+      ? `${used} / ${formatCredits(extra.monthlyLimit, extra.currency)}`
+      : `${used} ${t('popup.noLimit')}`
   }
+  extraUsageEl.hidden = !extra?.isEnabled
 
-  const updated = new Date(quota.lastUpdated)
-  lastUpdated.textContent = t('popup.lastUpdated', { time: updated.toLocaleTimeString() })
+  const time = new Date(quota.lastUpdated).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit' })
+  lastUpdated.textContent = t('popup.lastUpdated', { time })
 
   // Show error banner for real errors, not for rate limits (cached data is still valid)
   if (quota.error && quota.error.type !== 'rate_limit') {
@@ -131,88 +109,25 @@ function updateQuotaDisplay(quota: QuotaInfo): void {
   }
 }
 
-function showLoadingState(): void {
-  header.style.display = 'flex'
-  skeletonContainer.style.display = 'flex'
-  quotaCards.style.display = 'none'
-  footer.style.display = 'none'
-  notConnected.style.display = 'none'
+function setView(view: 'loading' | 'data' | 'error' | 'signedOut'): void {
+  popup.setAttribute('aria-busy', String(view === 'loading'))
+  header.hidden = view === 'signedOut'
+  skeletonContainer.hidden = view !== 'loading'
+  quotaCards.hidden = view !== 'data'
+  footer.hidden = view !== 'data'
+  notConnected.hidden = view !== 'signedOut'
+  if (view === 'signedOut') errorSection.hidden = true
   reportContentHeight()
 }
 
-function showConnectedState(): void {
-  header.style.display = 'flex'
-  skeletonContainer.style.display = 'none'
-  quotaCards.style.display = 'flex'
-  footer.style.display = 'block'
-  notConnected.style.display = 'none'
-  reportContentHeight()
-}
-
-function showNotConnectedState(): void {
-  header.style.display = 'none'
-  skeletonContainer.style.display = 'none'
-  quotaCards.style.display = 'none'
-  footer.style.display = 'none'
-  notConnected.style.display = 'flex'
-  errorSection.style.display = 'none'
-  reportContentHeight()
+function showQuota(quota: QuotaInfo): void {
+  setView('data')
+  updateQuotaDisplay(quota)
 }
 
 function showFetchErrorState(error: QuotaError): void {
-  header.style.display = 'flex'
-  skeletonContainer.style.display = 'none'
-  quotaCards.style.display = 'none'
-  footer.style.display = 'none'
-  notConnected.style.display = 'none'
-
-  errorSection.classList.add('standalone')
-  errorSection.style.display = 'flex'
-
-  errorMessage.textContent = error.message
-
-  switch (error.type) {
-    case 'auth':
-      errorGuidance.textContent = t('error.authGuidance')
-      errorRetryBtn.style.display = 'none'
-      errorLoginBtn.style.display = 'inline-block'
-      break
-    case 'network':
-      errorGuidance.textContent = t('error.networkGuidance')
-      errorRetryBtn.style.display = 'inline-block'
-      errorLoginBtn.style.display = 'none'
-      break
-    case 'rate_limit':
-      errorGuidance.textContent = t('error.rateLimitGuidance')
-      errorRetryBtn.style.display = 'inline-block'
-      errorLoginBtn.style.display = 'none'
-      break
-    case 'server':
-      errorGuidance.textContent = t('error.serverGuidance')
-      errorRetryBtn.style.display = 'inline-block'
-      errorLoginBtn.style.display = 'none'
-      break
-    default:
-      errorGuidance.textContent = ''
-      errorRetryBtn.style.display = 'inline-block'
-      errorLoginBtn.style.display = 'none'
-  }
-
-  reportContentHeight()
-}
-
-function formatSubscriptionType(type?: string): string {
-  if (!type) return 'Pro'
-
-  switch (type.toLowerCase()) {
-    case 'max':
-    case 'claude_max':
-      return 'Max'
-    case 'pro':
-    case 'claude_pro':
-    default:
-      return 'Pro'
-  }
+  setView('error')
+  showError(error, true)
 }
 
 async function loadUserInfo(): Promise<void> {
@@ -220,7 +135,9 @@ async function loadUserInfo(): Promise<void> {
     const userInfo = await window.claudeBar.getUserInfo()
     if (userInfo) {
       userName.textContent = userInfo.name || userInfo.email || t('popup.defaultUser')
-      subscriptionBadge.textContent = formatSubscriptionType(userInfo.subscriptionType)
+      const plan = PLANS[(userInfo.subscriptionType ?? '').toLowerCase().replace(/^claude_/, '')]
+      subscriptionBadge.textContent = plan ?? ''
+      subscriptionBadge.hidden = !plan
     }
   } catch (error) {
     console.error('Failed to load user info:', error)
@@ -233,46 +150,38 @@ async function loadQuota(): Promise<void> {
     const cachedQuota = await window.claudeBar.getQuota()
     if (cachedQuota) {
       await loadUserInfo()
-      showConnectedState()
-      updateQuotaDisplay(cachedQuota)
+      showQuota(cachedQuota)
       return
     }
 
-    showLoadingState()
+    setView('loading')
 
     const hasCredentials = await window.claudeBar.hasCredentials()
 
     if (!hasCredentials) {
-      showNotConnectedState()
+      setView('signedOut')
       return
     }
 
     await loadUserInfo()
 
     const lastError = await window.claudeBar.getLastError()
-    if (lastError) {
-      showFetchErrorState(lastError)
-    } else {
-      showLoadingState()
-    }
+    if (lastError) showFetchErrorState(lastError)
   } catch (error) {
     console.error('Failed to load quota:', error)
-    lastUpdated.textContent = t('error.loading')
+    showFetchErrorState({ type: 'unknown', message: t('error.loading'), retryable: true })
   }
 }
 
 const toast = document.getElementById('toast') as HTMLElement
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-function showToast(message: string, variant: 'info' | 'success' = 'success'): void {
+// Overlay: does not change the window height
+function showToast(message: string): void {
   if (toastTimer) clearTimeout(toastTimer)
   toast.textContent = message
-  toast.className = `toast ${variant} show`
-  reportContentHeight()
-  toastTimer = setTimeout(() => {
-    toast.classList.remove('show')
-    reportContentHeight()
-  }, 2000)
+  toast.classList.add('show')
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2000)
 }
 
 async function refreshQuota(): Promise<void> {
@@ -282,18 +191,14 @@ async function refreshQuota(): Promise<void> {
   try {
     // First, show refreshed cached data (with recalculated times)
     const cached = await window.claudeBar.getQuota()
-    if (cached) {
-      showConnectedState()
-      updateQuotaDisplay(cached)
-    }
+    if (cached) showQuota(cached)
 
     // Then attempt an API refresh (may return cache if min interval not elapsed)
     const result = await window.claudeBar.refreshQuota()
     if (result.throttled) {
-      showToast(t('popup.throttled', { seconds: result.retryIn }), 'info')
+      showToast(t('popup.throttled', { seconds: result.retryIn }))
     } else if (result.quota) {
-      showConnectedState()
-      updateQuotaDisplay(result.quota)
+      showQuota(result.quota)
     }
   } catch (error) {
     console.error('Failed to refresh quota:', error)
@@ -310,27 +215,16 @@ async function refreshQuota(): Promise<void> {
 refreshBtn.addEventListener('click', refreshQuota)
 errorRetryBtn.addEventListener('click', refreshQuota)
 
-const popupLoginBtn = document.getElementById('popupLoginBtn') as HTMLButtonElement | null
-if (popupLoginBtn) {
-  popupLoginBtn.addEventListener('click', () => {
-    window.claudeBar.openSettings()
-  })
-}
-
-errorLoginBtn.addEventListener('click', () => {
-  window.claudeBar.openSettings()
-})
+const openSettings = (): void => void window.claudeBar.openSettings()
+document.getElementById('popupLoginBtn')!.addEventListener('click', openSettings)
+document.getElementById('settingsLink')!.addEventListener('click', openSettings)
+errorLoginBtn.addEventListener('click', openSettings)
 
 // Listen for quota updates from main process
-window.claudeBar.onQuotaUpdated(async (quota) => {
-  showConnectedState()
-  updateQuotaDisplay(quota)
-})
+window.claudeBar.onQuotaUpdated(showQuota)
 
 // Listen for quota errors from main process
-window.claudeBar.onQuotaError((error) => {
-  showFetchErrorState(error)
-})
+window.claudeBar.onQuotaError(showFetchErrorState)
 
 // Listen for auth state changes
 let initialLoadDone = false
@@ -340,18 +234,14 @@ window.claudeBar.onAuthStateChanged(async (state) => {
       await loadQuota()
     }
   } else if (state === 'unauthenticated') {
-    showNotConnectedState()
+    setView('signedOut')
   }
 })
 
 // Report content height to resize window
 function reportContentHeight(): void {
   requestAnimationFrame(() => {
-    const container = document.querySelector('.popup-container') as HTMLElement
-    if (container) {
-      const height = container.scrollHeight + 4
-      window.claudeBar.reportContentHeight(height)
-    }
+    window.claudeBar.reportContentHeight(popup.scrollHeight)
   })
 }
 
