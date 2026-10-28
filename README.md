@@ -1,8 +1,8 @@
 # Claude Bar
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="Platform: macOS">
-  <img src="https://img.shields.io/badge/electron-40-blue" alt="Electron 40">
+  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey" alt="Platform: macOS 13+">
+  <img src="https://img.shields.io/badge/electron-45-blue" alt="Electron 45">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT">
 </p>
 
@@ -10,9 +10,10 @@
   <strong>Monitor your Claude Code quotas directly from the macOS menu bar.</strong>
 </p>
 
-<!-- TODO: Screenshot needs to be updated to reflect current UI features:
-     trend indicators (↑↓→), reset progress bars, time-to-critical warning,
-     statistics section (Avg 5h, Avg 7d, Peak), and refresh button in header. -->
+<!-- Screenshot is out of date. The current popup uses the shared light/dark tokens,
+     one meter per quota with an elapsed-time tick, and High/Critical text labels.
+     It does not show trend arrows, a statistics block, a separate reset bar, or pause.
+     Leave this file in place until a new capture is taken on a Mac. -->
 <p align="center">
   <img src="assets/screenshot.png" alt="Claude Bar Screenshot" width="400">
 </p>
@@ -24,59 +25,40 @@
 ### Core
 - **In-App Login** — Log in directly from Claude Bar with OAuth (no CLI needed)
 - **Menu Bar Display** — Shows your current quota usage right in the menu bar
-- **Detailed Popup** — Click to see session (5h) and weekly (7d) quotas with progress bars
-- **Smart Color Coding** — Progress bars change from green → orange → red as usage increases
-- **Auto Refresh** — Configurable refresh interval (30s to 10min) with adaptive mode
-- **Visual Feedback** — Pulse animation and toast notification on successful refresh
-- **Rich Tooltips** — Hover for detailed info including trends and time estimates
-- **Dark Mode** — Seamlessly adapts to your macOS appearance
+- **Detailed Popup** — Session (5h) and weekly (7d) quotas, plus an Opus weekly quota and overage when your plan reports them
+- **Levels** — Under 70% is normal. From 70% the popup says **High**; from 90% it says **Critical**. The menu bar icon changes with the same thresholds. These levels are not configurable.
+- **Auto Refresh** — 5, 10, or 15 minutes
+- **Visual Feedback** — The refresh button spins while loading. If a refresh is throttled, a toast overlays the popup
+- **Tooltips** — Hover the menu bar icon for each quota, the time until it resets, and when the numbers were last updated
+- **Dark Mode** — Follows the macOS appearance
 - **Lightweight** — Runs quietly in the background with minimal resource usage
 - **Native Feel** — Uses macOS vibrancy effects for a native look
+- **Languages** — English and French
 
 ### Display Modes
 Choose your preferred menu bar format (right-click → Display Mode):
 - **Standard**: `45% / 32%`
-- **Detailed**: `5h: 45%↑ | 7d: 32%→` (with trend indicators)
-- **Compact**: `45%` (shows session usage)
-- **Time Remaining**: `4h 30m` (time until session reset)
+- **Detailed**: `5h: 45% | 7d: 32%` (adds `| Opus: 10%` when that quota exists)
+- **Compact**: `45%` (session usage)
+- **Time Remaining**: `4h 30m` (time until the session resets)
 - **Minimal**: Icon only, no text
 
-### Usage Statistics
-- Track quota usage over time with persistent storage
-- Statistics: average, peak, and minimum values for session and weekly quotas
-- **Trend indicators**: ↑ rising, ↓ falling, → stable (based on last 30 minutes of data)
-- **Time to critical**: Estimates when you'll reach critical level (based on current trend)
-- **Reset progress bar**: Visual indicator of time elapsed in current period
-
-### Pause Mode
-Right-click → Pause to temporarily stop monitoring:
-- Pause for 30 minutes, 1 hour, 2 hours, or indefinitely
-- Notifications are suppressed while paused
-- Menu bar shows pause status with remaining time
-
-### Adaptive Refresh
-When enabled (default), refresh rate increases automatically:
-- **Normal**: Uses your configured interval
-- **Warning (70%+)**: Refreshes 2x faster
-- **Critical (90%+)**: Refreshes 4x faster
+### Gauge
+Each quota is a single meter. The fill is how much of the quota you have used. A tick on the same meter shows how far the current period has elapsed.
 
 ### Notifications
-- **Customizable thresholds**: Set your own warning and critical levels (50-99%)
-- Warning alert at configurable threshold (default 70%)
-- Critical alert at configurable threshold (default 90%)
-- Quota recovery notifications (when usage drops back to normal levels)
-- Token refresh failure alerts (with cooldown to prevent spam)
-- Toggle on/off in Settings
+- A system notification the first time a quota crosses 70%, and again at 90% (once per level, remembered across restarts)
+- Toggle on/off in Settings. The label states the fixed 70% and 90% levels.
 
 ### Auto-Updates
-- Automatic update checks on startup
-- **Manual check button** in Settings (auto-hides during download and when update is ready)
-- Background download with **gradient progress bar** and real-time percentage
-- One-click install from Settings
+- Automatic check on startup, then about every 6 hours
+- **Check for Updates** in Settings and in the menu bar menu (hidden while a download is in progress and when an update is ready to install)
+- Background download with a progress bar
+- **Install & Restart** from Settings
 
 ## Requirements
 
-- macOS 10.13 or later
+- macOS 13.0 or later
 - A Claude Pro or Max subscription
 
 ## Installation
@@ -87,12 +69,9 @@ When enabled (default), refresh rate increases automatically:
    - **Apple Silicon (M1/M2/M3):** `Claude Bar-x.x.x-arm64.dmg`
    - **Intel:** `Claude Bar-x.x.x-x64.dmg`
 2. Open the DMG and drag **Claude Bar** to your Applications folder
-3. **Important (Apple Silicon):** The app is not notarized. Before first launch, run:
-   ```bash
-   xattr -cr /Applications/Claude\ Bar.app
-   codesign --force --deep --sign - /Applications/Claude\ Bar.app
-   ```
-4. Launch Claude Bar from Applications
+3. Launch Claude Bar from Applications
+
+Release builds are signed and notarized. The Gatekeeper workaround below is only for an unsigned build you produced yourself.
 
 ### From Source
 
@@ -123,96 +102,84 @@ npm run dist
 
 ### Option 2: Use Claude Code CLI credentials
 
-If you already use Claude Code CLI, Claude Bar can reuse your existing credentials:
+If you already use Claude Code CLI, Claude Bar can read your existing credentials:
 
 1. Make sure you're logged in via the CLI:
    ```bash
-   claude login
+   claude
    ```
-2. In Claude Bar, go to **Settings → Authentication method** and select **CLI (Keychain)**
-3. Claude Bar will now use your CLI credentials from the macOS Keychain
+2. In Claude Bar, go to **Settings → Account → Source** and select **CLI**
+3. Claude Bar reads the CLI credentials from the macOS Keychain. It does not refresh or replace them. If the token expires, run `claude` again so Claude Code can rotate it.
 
 ## Usage
 
 | Action | Result |
 |--------|--------|
-| **Left-click** on menu bar icon | Opens quota popup and refreshes data |
-| **Right-click** on menu bar icon | Shows context menu (Refresh, Settings, Quit) |
+| **Left-click** on menu bar icon | Opens or closes the quota popup |
+| **Right-click** on menu bar icon | Context menu (Refresh, Display Mode, Settings, Check for Updates, Quit) |
+| **Refresh** (popup button or menu) | Fetches quota data, at most once every 15 seconds |
 
 ### Menu Bar Display
 
-The menu bar shows two percentages:
-- **First number**: Session quota (5-hour rolling window)
-- **Second number**: Weekly quota (7-day rolling window)
+In the standard display mode the menu bar shows two percentages:
+- **First number**: Session quota (5-hour window)
+- **Second number**: Weekly quota (7-day window)
+
+Other formats are listed under Display Modes.
 
 ### Quota Levels
 
-| Usage | Color | Meaning |
-|-------|-------|---------|
-| Below warning | 🟢 Green | Normal usage |
-| Warning level | 🟠 Orange | Approaching limit |
-| Critical level | 🔴 Red | Near or at limit |
+| Usage | Meaning |
+|-------|---------|
+| Below 70% | Normal |
+| 70% or more | High |
+| 90% or more | Critical |
 
-*Default thresholds: Warning at 70%, Critical at 90% (customizable in Settings)*
+Thresholds are fixed.
 
 ### Settings
 
-Access settings via right-click → Settings:
+Access settings via right-click → Settings. The window is grouped into Account, General, and Updates:
 
-- **Refresh Interval**: How often to fetch new quota data (30s - 10min)
-- **Adaptive Refresh**: Automatically increase refresh rate at warning/critical levels
-- **Authentication Method**: Choose between Claude Bar (OAuth) or CLI (Keychain) — no automatic fallback between sources
-- **Launch at Login**: Automatically start Claude Bar when you log in
-- **Notifications**: Enable/disable system notifications for quota alerts
-- **Alert Thresholds**: Customize warning (default 70%) and critical (default 90%) levels
-- **Show "Est. critical" prediction**: Toggle the time-to-critical estimation display
-- **Updates**: Check for updates manually and install with one click
+- **Source**: Claude Bar (OAuth) or CLI (Keychain). Only the selected source is used.
+- **Language**: English or French
+- **Refresh every**: 5, 10, or 15 minutes
+- **Alerts**: System notifications at 70% and 90%
+- **Open at login**
+- **Updates**: Check, download, and install with one click
 
 ## How It Works
 
-Claude Bar authenticates via OAuth with the Anthropic API. You can either log in directly from the app (tokens encrypted via macOS `safeStorage`) or reuse Claude Code CLI credentials from the macOS Keychain. It periodically calls the Anthropic API to fetch your current usage:
+Claude Bar authenticates via OAuth with the Anthropic API. You can log in from the app (tokens encrypted via macOS `safeStorage`) or reuse Claude Code CLI credentials from the macOS Keychain. It periodically calls:
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
 ```
 
-No API keys or manual configuration required!
+No API keys or manual configuration required.
 
-### Sleep/Wake & Cold Boot Handling
+### Sleep and Wake
 
-Claude Bar handles macOS sleep/wake and cold boot gracefully:
-- Monitoring stops when the Mac goes to sleep
-- Resumes automatically after wake (with a short delay for network reconnection)
-- On cold boot (Launch at Login), startup is delayed to allow network initialization
-- Network errors during token refresh are treated as transient (no false auth notifications)
+- The first quota fetch waits about 2 seconds after launch so the network can come up
+- After the Mac wakes, monitoring restarts a couple of seconds later
 
 ### Token Management
 
-Claude Bar automatically handles token refresh:
-- Detects expired OAuth tokens
-- Refreshes tokens using the refresh token
-- Updates stored credentials (Keychain or encrypted store)
-- Graceful error handling if refresh fails (with 30-minute cooldown on error notifications)
+| Source | Storage | Token refresh |
+|--------|---------|---------------|
+| **Claude Bar (OAuth)** | Encrypted via `safeStorage` | Automatic |
+| **CLI (Keychain)** | macOS Keychain, read-only | By Claude Code (`claude`). Claude Bar never writes this item. |
 
-### Authentication Sources
-
-Claude Bar supports two credential sources, selectable in Settings:
-
-| Source | Storage | Token Refresh | Login/Logout |
-|--------|---------|---------------|--------------|
-| **Claude Bar (OAuth)** | Encrypted via `safeStorage` | Automatic | Via Settings |
-| **CLI (Keychain)** | macOS Keychain | Automatic | Via `claude login` |
-
-Choose your preferred method in **Settings → Authentication method**. No automatic fallback between sources — the selected method is the only one used.
+Switching source, logging in, or logging out clears the cached quota and fetches again.
 
 ### Security
 
-- **Context Isolation**: Renderer cannot access Node.js
-- **Preload Bridge**: All IPC via secure contextBridge
+- **Context Isolation**: The renderer cannot access Node.js
+- **Preload Bridge**: All IPC via a secure contextBridge
 - **Encrypted Token Storage**: In-app tokens encrypted via macOS `safeStorage`
-- **Keychain Storage**: CLI credentials stored in macOS Keychain
-- **PKCE OAuth Flow**: Secure authorization code flow with code challenge
-- **Signed Updates**: Auto-updates are signed and verified
+- **Keychain**: CLI credentials are read, never written
+- **PKCE OAuth Flow**: Authorization code flow with a code challenge
+- **Signed Updates**: Release builds are signed and notarized
 
 ## Development
 
@@ -239,11 +206,11 @@ npm run release
 claude-bar/
 ├── src/
 │   ├── main/           # Electron main process
-│   │   ├── services/   # Auth, Keychain, API, Scheduler, History, Notifications, Updater
-│   │   ├── tray.ts     # Menu bar icon management
-│   │   └── windows.ts  # Popup & Settings windows
+│   │   ├── services/   # Auth, Keychain, API, Scheduler, Notifications, Updater
+│   │   ├── tray.ts     # Menu bar icon
+│   │   └── windows.ts  # Popup and Settings windows
 │   ├── preload/        # Secure IPC bridge
-│   └── renderer/       # UI (popup & settings)
+│   └── renderer/       # Popup, Settings, shared tokens
 ├── tests/              # Vitest unit tests
 ├── assets/             # Icons
 └── scripts/            # Icon generation scripts
@@ -261,24 +228,20 @@ npm run test:coverage  # Run tests with coverage report
 
 ### "Not Connected" message
 
-Click **Log In** in the popup or Settings window to authenticate directly. Alternatively, authenticate via the CLI:
-```bash
-claude login
-```
-Then restart Claude Bar.
+Click **Log In** in the popup or Settings. Or authenticate with Claude Code (`claude`) and select **CLI** as the source in Settings.
 
 ### Quota not updating
 
-Try right-clicking the menu bar icon and selecting "Refresh". If the issue persists, check your internet connection.
+Right-click the menu bar icon and choose **Refresh**. A manual refresh is ignored if the last one was less than 15 seconds ago. If it still fails, check the network connection.
 
-### "Cannot open application" error
+### "Cannot open application" on an unsigned build
 
-On Apple Silicon Macs, you may see this error because the app is not notarized. Run these commands in Terminal:
+Official release DMGs are notarized. A DMG you built locally without signing can be blocked by Gatekeeper. In that case:
+
 ```bash
 xattr -cr /Applications/Claude\ Bar.app
 codesign --force --deep --sign - /Applications/Claude\ Bar.app
 ```
-Then try opening the app again.
 
 ### App not starting
 
