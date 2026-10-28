@@ -6,8 +6,7 @@
     "buildResources": "assets"
   },
   "files": [
-    "dist/**/*",
-    "assets/**/*"
+    "dist/**/*"
   ],
   "extraResources": [
     {
@@ -45,9 +44,9 @@
     "entitlementsInherit": "entitlements.mac.plist",
     "hardenedRuntime": true,
     "gatekeeperAssess": false,
-    "minimumSystemVersion": "10.13"
+    "minimumSystemVersion": "13.0",
+    "notarize": true
   },
-  "afterSign": "scripts/notarize.js",
   "dmg": {
     "artifactName": "${productName}-${version}-${arch}.${ext}",
     "title": "Claude Bar",

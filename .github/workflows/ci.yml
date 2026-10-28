@@ -11,10 +11,6 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    env:
-      # Build/tests don't run Electron itself
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
-
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
