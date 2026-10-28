@@ -27,4 +27,5 @@ export interface QuotaInfo {
   extraUsage?: ExtraUsageInfo
   lastUpdated: Date
   error?: QuotaError
+  stale?: boolean // data older than 2x the refresh interval
 }

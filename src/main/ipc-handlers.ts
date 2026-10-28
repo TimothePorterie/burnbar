@@ -6,6 +6,7 @@ import { schedulerService } from './services/scheduler'
 import { updaterService } from './services/updater'
 import { logger } from './services/logger'
 import { windowManager } from './windows'
+import { trayManager } from './tray'
 import { settingsStore as store } from './services/settings-store'
 import type { Locale } from '../shared/i18n'
 import { setLocale, t } from '../shared/i18n'
@@ -30,6 +31,21 @@ function isValidAuthMode(value: unknown): value is 'app' | 'cli' {
 
 function isValidLanguage(value: unknown): value is Locale {
   return typeof value === 'string' && VALID_LANGUAGES.includes(value as Locale)
+}
+
+function broadcast(channel: string, data: unknown): void {
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(channel, data)
+    }
+  })
+}
+
+// Login, logout and auth mode change: drop the previous account's data, then fetch the new one
+function resetAccount(): void {
+  quotaService.resetForAccountChange()
+  windowManager.closePopup() // rebuilt with the new account's user info on next open
+  void schedulerService.refresh(true)
 }
 
 export function setupIpcHandlers(): void {
@@ -167,8 +183,7 @@ export function setupIpcHandlers(): void {
     try {
       if (store.get('authMode') !== mode) {
         store.set('authMode', mode)
-        quotaService.clear()
-        void schedulerService.refresh(true)
+        resetAccount()
       }
       logger.info(`Auth mode set to '${mode}'`)
       return true
@@ -204,6 +219,8 @@ export function setupIpcHandlers(): void {
       store.set('language', lang)
       setLocale(lang)
       windowManager.closePopup()
+      trayManager.refreshDisplay()
+      broadcast('language-changed', lang)
       logger.info(`Language set to '${lang}'`)
       return true
     } catch (error) {
@@ -241,8 +258,7 @@ export function setupIpcHandlers(): void {
       try {
         const result = await authService.submitCode(code)
         if (result.success && store.get('authMode') === 'app') {
-          quotaService.clear()
-          void schedulerService.refresh(true)
+          resetAccount()
         }
         return result
       } catch (error) {
@@ -256,8 +272,7 @@ export function setupIpcHandlers(): void {
     try {
       authService.logout()
       if (store.get('authMode') === 'app') {
-        quotaService.clear()
-        void schedulerService.refresh(true)
+        resetAccount()
       }
       return true
     } catch (error) {
@@ -331,13 +346,7 @@ export function setupIpcHandlers(): void {
   })
 
   // Forward auth state changes to all renderer windows
-  authService.onStateChange((state) => {
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (!win.isDestroyed()) {
-        win.webContents.send('auth-state-changed', state)
-      }
-    })
-  })
+  authService.onStateChange((state) => broadcast('auth-state-changed', state))
 }
 
 export function loadSettings(): void {

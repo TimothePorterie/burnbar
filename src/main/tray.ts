@@ -7,7 +7,7 @@ import { logger } from './services/logger'
 import { windowManager } from './windows'
 import { settingsStore } from './services/settings-store'
 import { notificationService } from './services/notifications'
-import { t } from '../shared/i18n'
+import { t, getLocale } from '../shared/i18n'
 
 type DisplayMode = 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
 
@@ -15,6 +15,8 @@ export class TrayManager {
   private tray: Tray | null = null
   private onShowPopup: (() => void) | null = null
   private onShowSettings: (() => void) | null = null
+  private minuteTimer: NodeJS.Timeout | null = null
+  private lastNotifiedFetch = Date.now() // restored data predates this: notify only after a real fetch
 
   private getIconPath(type: 'normal' | 'warning' | 'critical' = 'normal'): string {
     const basePath = app.isPackaged
@@ -40,8 +42,8 @@ export class TrayManager {
     icon.setTemplateImage(true)
 
     this.tray = new Tray(icon)
-    this.updateTooltip()
-    this.updateTitle()
+    this.refreshDisplay()
+    this.syncMinuteTimer()
 
     // Left click shows popup (scheduler handles periodic refresh)
     this.tray.on('click', () => {
@@ -57,14 +59,17 @@ export class TrayManager {
 
     // Listen for quota updates
     schedulerService.onRefresh(() => {
-      this.updateTitle()
-      this.updateIcon()
-      this.updateTooltip()
-      notificationService.checkAndNotify()
+      this.refreshDisplay()
       // Send updated quota to popup window
       const quota = quotaService.getCachedQuota()
       if (quota) {
         windowManager.sendToPopup('quota-updated', quota)
+        // Throttled, rate-limited or failed refreshes return the same lastUpdated
+        const fetchedAt = quota.lastUpdated.getTime()
+        if (fetchedAt > this.lastNotifiedFetch) {
+          this.lastNotifiedFetch = fetchedAt
+          notificationService.checkAndNotify()
+        }
       }
       // Nothing to show: forward the error so the popup doesn't stay on the skeleton
       const error = quotaService.getLastError()
@@ -83,7 +88,31 @@ export class TrayManager {
   private setDisplayMode(mode: DisplayMode): void {
     settingsStore.set('displayMode', mode)
     this.updateTitle()
+    this.syncMinuteTimer()
     logger.info(`Display mode changed to: ${mode}`)
+  }
+
+  // The countdown only moves in time-remaining mode
+  private syncMinuteTimer(): void {
+    const needed = this.getDisplayMode() === 'time-remaining'
+    if (needed && !this.minuteTimer) {
+      this.minuteTimer = setInterval(() => this.updateTitle(), 60000)
+    } else if (!needed && this.minuteTimer) {
+      clearInterval(this.minuteTimer)
+      this.minuteTimer = null
+    }
+  }
+
+  refreshDisplay(): void {
+    this.updateTitle()
+    this.updateIcon()
+    this.updateTooltip()
+  }
+
+  // Errors other than rate limits (cached data is still valid then), or data too old to trust
+  private needsAttention(): boolean {
+    const lastError = quotaService.getLastError()
+    return (!!lastError && lastError.type !== 'rate_limit') || !!quotaService.getCachedQuota()?.stale
   }
 
   updateTitle(): void {
@@ -125,15 +154,14 @@ export class TrayManager {
         title = `${fiveHour}% / ${sevenDay}%`
     }
 
-    // Stale data: flag it so an expired session doesn't hide behind old numbers
-    this.tray.setTitle(hasError ? `\u26a0 ${title}`.trim() : title)
+    // Flag errors and stale data so an expired session doesn't hide behind old numbers
+    this.tray.setTitle(this.needsAttention() ? `\u26a0 ${title}`.trim() : title)
   }
 
   updateIcon(): void {
     if (!this.tray) return
 
-    const lastError = quotaService.getLastError()
-    if (lastError && lastError.type !== 'rate_limit') {
+    if (this.needsAttention()) {
       const iconPath = this.getIconPath('warning')
       const icon = nativeImage.createFromPath(iconPath)
       this.tray.setImage(icon)
@@ -174,9 +202,12 @@ export class TrayManager {
     if (quota.sevenDayOpus) {
       lines.push(t('tray.opus', { pct: Math.round(quota.sevenDayOpus.utilization), resets: quota.sevenDayOpus.resetsIn }))
     }
-    lines.push(t('tray.updated', { time: quota.lastUpdated.toLocaleTimeString() }))
+    lines.push(t('tray.updated', { time: quota.lastUpdated.toLocaleTimeString(getLocale()) }))
     if (quota.error && quota.error.type !== 'rate_limit') {
       lines.push(quota.error.message)
+    }
+    if (quota.stale) {
+      lines.push(t('tray.stale'))
     }
     this.tray.setToolTip(lines.join('\n'))
   }
@@ -259,6 +290,10 @@ export class TrayManager {
   }
 
   destroy(): void {
+    if (this.minuteTimer) {
+      clearInterval(this.minuteTimer)
+      this.minuteTimer = null
+    }
     if (this.tray) {
       this.tray.destroy()
       this.tray = null

@@ -70,6 +70,8 @@ class UpdaterService {
       logger.error('Auto-updater error:', err.message)
     })
 
+    setInterval(() => this.checkForUpdates(), 6 * 60 * 60 * 1000)
+
     logger.info('Auto-updater initialized')
   }
 
@@ -78,6 +80,8 @@ class UpdaterService {
       logger.debug('Auto-updater not initialized, skipping check')
       return
     }
+    // A downloaded update waits for install: a new check would reset the status
+    if (this.state.status === 'downloading' || this.state.status === 'downloaded') return
 
     try {
       await autoUpdater.checkForUpdates()

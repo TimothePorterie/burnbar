@@ -3,8 +3,10 @@ import { authService } from './auth'
 import { logger } from './logger'
 import { settingsStore, PersistedQuotaData } from './settings-store'
 import { t } from '../../shared/i18n'
+import { getQuotaLevel } from '../../shared/quota'
+import { classifyError, classifyHttpError } from './quota-errors'
 export type { QuotaErrorType, QuotaError, QuotaPeriod, ExtraUsageInfo, QuotaInfo } from '../../shared/types'
-import type { QuotaError, QuotaPeriod, QuotaInfo, ExtraUsageInfo } from '../../shared/types'
+import type { QuotaError, QuotaPeriod, QuotaInfo } from '../../shared/types'
 
 export interface QuotaData {
   utilization: number
@@ -25,8 +27,6 @@ export interface UsageResponse {
   extra_usage?: ExtraUsageData
 }
 
-const WARNING_THRESHOLD = 70
-const CRITICAL_THRESHOLD = 90
 const MIN_FETCH_INTERVAL_MS = 290000 // ~5min between scheduled calls; slack absorbs request latency vs setInterval ticks
 const MIN_FORCE_INTERVAL_MS = 15000 // 15s absolute minimum even for manual refresh
 const MIN_429_COOLDOWN_SEC = 120 // OAuth /usage returns retry-after: 0 which is misleading — use 2min floor
@@ -59,7 +59,7 @@ export function formatTimeUntil(date: Date): string {
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
-  if (diffDays > 0) return `${diffDays}d ${diffHours % 24}h`
+  if (diffDays > 0) return t('time.daysHours', { d: diffDays, h: diffHours % 24 })
   if (diffHours > 0) return `${diffHours}h ${diffMinutes % 60}m`
   return `${diffMinutes}m`
 }
@@ -70,6 +70,16 @@ export function calculateResetProgress(resetsAt: Date, periodHours: number): num
   const periodMs = periodHours * 60 * 60 * 1000
   const elapsed = Date.now() - (resetTime - periodMs)
   return Math.round(Math.max(0, Math.min(100, (elapsed / periodMs) * 100)))
+}
+
+// A period whose reset time has passed restarts at 0% until the next fetch
+function buildPeriod(utilization: number, resetsAt: Date, periodHours: number): QuotaPeriod {
+  return {
+    utilization: resetsAt.getTime() <= Date.now() ? 0 : utilization,
+    resetsAt,
+    resetsIn: formatTimeUntil(resetsAt),
+    resetProgress: calculateResetProgress(resetsAt, periodHours)
+  }
 }
 
 export class QuotaService {
@@ -83,6 +93,7 @@ export class QuotaService {
   private rateLimitedUntil: number
   private rateLimitRemaining: number | null = null
   private pendingFetch: Promise<QuotaInfo | null> | null = null
+  private accountGeneration = 0
 
   constructor() {
     // Restore persisted rate limit, but clear if already expired
@@ -98,31 +109,15 @@ export class QuotaService {
     // Restore persisted quota data (if < 24h old)
     const lastQuota = settingsStore.get('lastQuotaData') as PersistedQuotaData | null
     if (lastQuota && Date.now() - lastQuota.fetchedAt < 24 * 60 * 60 * 1000) {
-      const fiveHourReset = new Date(lastQuota.fiveHour.resetsAt ?? NaN)
-      const sevenDayReset = new Date(lastQuota.sevenDay.resetsAt ?? NaN)
       this.cachedQuota = {
-        fiveHour: {
-          utilization: lastQuota.fiveHour.utilization,
-          resetsAt: fiveHourReset,
-          resetsIn: formatTimeUntil(fiveHourReset),
-          resetProgress: calculateResetProgress(fiveHourReset, 5)
-        },
-        sevenDay: {
-          utilization: lastQuota.sevenDay.utilization,
-          resetsAt: sevenDayReset,
-          resetsIn: formatTimeUntil(sevenDayReset),
-          resetProgress: calculateResetProgress(sevenDayReset, 7 * 24)
-        },
+        fiveHour: buildPeriod(lastQuota.fiveHour.utilization, new Date(lastQuota.fiveHour.resetsAt ?? NaN), 5),
+        sevenDay: buildPeriod(lastQuota.sevenDay.utilization, new Date(lastQuota.sevenDay.resetsAt ?? NaN), 7 * 24),
         lastUpdated: new Date(lastQuota.fetchedAt)
       }
       if (lastQuota.sevenDayOpus) {
-        const opusReset = new Date(lastQuota.sevenDayOpus.resetsAt ?? NaN)
-        this.cachedQuota.sevenDayOpus = {
-          utilization: lastQuota.sevenDayOpus.utilization,
-          resetsAt: opusReset,
-          resetsIn: formatTimeUntil(opusReset),
-          resetProgress: calculateResetProgress(opusReset, 7 * 24)
-        }
+        this.cachedQuota.sevenDayOpus = buildPeriod(
+          lastQuota.sevenDayOpus.utilization, new Date(lastQuota.sevenDayOpus.resetsAt ?? NaN), 7 * 24
+        )
       }
       this.lastFetchTime = lastQuota.fetchedAt
       logger.info(`Restored persisted quota: 5h=${Math.round(lastQuota.fiveHour.utilization)}%, 7d=${Math.round(lastQuota.sevenDay.utilization)}% (${Math.round((Date.now() - lastQuota.fetchedAt) / 60000)}min ago)`)
@@ -149,11 +144,13 @@ export class QuotaService {
     }
 
     this._wasThrottled = false
-    this.pendingFetch = this.doFetch()
+    const request = this.doFetch()
+    this.pendingFetch = request
     try {
-      return await this.pendingFetch
+      return await request
     } finally {
-      this.pendingFetch = null
+      // An account reset may have started a newer fetch meanwhile
+      if (this.pendingFetch === request) this.pendingFetch = null
     }
   }
 
@@ -236,56 +233,39 @@ export class QuotaService {
   }
 
   private async doApiFetch(): Promise<QuotaInfo | null> {
+    // Throttle from the request start: a slow response must not make the next tick look too early
+    const startedAt = Date.now()
+    const generation = this.accountGeneration
     try {
       const credentials = await this.getCredentials()
 
       if (!credentials) return null
 
       const response = await this.fetchOnce(credentials)
-      if (!response) {
-        if (this.cachedQuota && this.lastError) {
-          return { ...this.cachedQuota, error: this.lastError }
-        }
-        return null
-      }
+      if (!response) return this.getCachedQuota()
 
       const rawData = await response.json()
       if (!isValidUsageResponse(rawData)) {
         logger.error('Invalid API response shape:', JSON.stringify(rawData).slice(0, 200))
         this.lastError = { type: 'server', message: t('error.unexpectedResponse'), retryable: true }
-        if (this.cachedQuota) return { ...this.cachedQuota, error: this.lastError }
-        return null
+        return this.getCachedQuota()
       }
       const data = rawData
 
-      const newFiveHourReset = new Date(data.five_hour.resets_at ?? NaN)
-      const newSevenDayReset = new Date(data.seven_day.resets_at ?? NaN)
+      // Account changed while the request was in flight: drop the previous account's data
+      if (generation !== this.accountGeneration) return null
 
       this.cachedQuota = {
-        fiveHour: {
-          utilization: data.five_hour.utilization,
-          resetsAt: newFiveHourReset,
-          resetsIn: formatTimeUntil(newFiveHourReset),
-          resetProgress: calculateResetProgress(newFiveHourReset, 5)
-        },
-        sevenDay: {
-          utilization: data.seven_day.utilization,
-          resetsAt: newSevenDayReset,
-          resetsIn: formatTimeUntil(newSevenDayReset),
-          resetProgress: calculateResetProgress(newSevenDayReset, 7 * 24)
-        },
+        fiveHour: buildPeriod(data.five_hour.utilization, new Date(data.five_hour.resets_at ?? NaN), 5),
+        sevenDay: buildPeriod(data.seven_day.utilization, new Date(data.seven_day.resets_at ?? NaN), 7 * 24),
         lastUpdated: new Date()
       }
 
       // Parse optional Opus weekly quota (Max plans)
       if (isValidQuota(data.seven_day_opus)) {
-        const opusReset = new Date(data.seven_day_opus.resets_at ?? NaN)
-        this.cachedQuota.sevenDayOpus = {
-          utilization: data.seven_day_opus.utilization,
-          resetsAt: opusReset,
-          resetsIn: formatTimeUntil(opusReset),
-          resetProgress: calculateResetProgress(opusReset, 7 * 24)
-        }
+        this.cachedQuota.sevenDayOpus = buildPeriod(
+          data.seven_day_opus.utilization, new Date(data.seven_day_opus.resets_at ?? NaN), 7 * 24
+        )
       }
 
       // Parse optional extra usage / overage info
@@ -298,7 +278,7 @@ export class QuotaService {
         }
       }
 
-      this.lastFetchTime = Date.now()
+      this.lastFetchTime = startedAt
       this.lastError = null
       // Only clear rate limit cooldown if we still have budget remaining
       if (this.rateLimitRemaining === null || this.rateLimitRemaining > 0) {
@@ -310,7 +290,7 @@ export class QuotaService {
       const persistedData: PersistedQuotaData = {
         fiveHour: { utilization: data.five_hour.utilization, resetsAt: data.five_hour.resets_at },
         sevenDay: { utilization: data.seven_day.utilization, resetsAt: data.seven_day.resets_at },
-        fetchedAt: this.lastFetchTime
+        fetchedAt: this.cachedQuota.lastUpdated.getTime()
       }
       if (isValidQuota(data.seven_day_opus)) {
         persistedData.sevenDayOpus = { utilization: data.seven_day_opus.utilization, resetsAt: data.seven_day_opus.resets_at }
@@ -324,15 +304,11 @@ export class QuotaService {
         `Quota fetched (API): 5h=${Math.round(data.five_hour.utilization)}%, 7d=${Math.round(data.seven_day.utilization)}%${opusLog}${overageLog}`
       )
 
-      return this.cachedQuota
+      return this.getCachedQuota()
     } catch (error) {
       logger.error('Failed to fetch quota:', error)
-      this.lastError = this.classifyError(error)
-
-      if (this.cachedQuota) {
-        return { ...this.cachedQuota, error: this.lastError }
-      }
-      return null
+      this.lastError = classifyError(error)
+      return this.getCachedQuota()
     }
   }
 
@@ -341,23 +317,15 @@ export class QuotaService {
    * No exponential backoff, no multi-retry loop.
    */
   private async fetchOnce(credentials: Credentials): Promise<Response | null> {
-    const doRequest = async (creds: Credentials): Promise<Response> => {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 15000)
-      try {
-        return await fetch(QuotaService.API_URL, {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${creds.accessToken}`,
-            'anthropic-beta': QuotaService.BETA_HEADER,
-            'Content-Type': 'application/json'
-          },
-          signal: controller.signal
-        })
-      } finally {
-        clearTimeout(timeoutId)
-      }
-    }
+    const doRequest = (creds: Credentials): Promise<Response> => fetch(QuotaService.API_URL, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${creds.accessToken}`,
+        'anthropic-beta': QuotaService.BETA_HEADER,
+        'Content-Type': 'application/json'
+      },
+      signal: AbortSignal.timeout(15000)
+    })
 
     try {
       let response = await doRequest(credentials)
@@ -399,11 +367,11 @@ export class QuotaService {
       // All other errors — no retry
       const errorText = await response.text()
       logger.error(`API error: ${response.status} - ${errorText.slice(0, 200)}`)
-      this.lastError = this.classifyError(new Error(`HTTP ${response.status}: ${errorText}`))
+      this.lastError = classifyHttpError(response.status)
       return null
     } catch (error) {
       logger.error('Network error:', error)
-      this.lastError = this.classifyError(error)
+      this.lastError = classifyError(error)
       return null
     }
   }
@@ -437,47 +405,6 @@ export class QuotaService {
     }
   }
 
-  getRateLimitRemaining(): number | null {
-    return this.rateLimitRemaining
-  }
-
-  private classifyError(error: unknown): QuotaError {
-    // Check error type/name first, then fall back to message matching
-    if (error instanceof TypeError && error.message.includes('fetch')) {
-      return { type: 'network', message: t('error.network'), retryable: true }
-    }
-
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      return { type: 'network', message: t('error.timeout'), retryable: true }
-    }
-
-    // Node.js system errors (ENOTFOUND, ECONNREFUSED, ECONNRESET, etc.)
-    if (error instanceof Error && 'code' in error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ENOTFOUND' || code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ETIMEDOUT') {
-        return { type: 'network', message: t('error.network'), retryable: true }
-      }
-    }
-
-    // HTTP status-based classification (from fetchOnce error wrapping)
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    const httpMatch = errorMessage.match(/^HTTP (\d{3}):/)
-    if (httpMatch) {
-      const status = parseInt(httpMatch[1], 10)
-      if (status === 401 || status === 403) {
-        return { type: 'auth', message: t('error.sessionExpiredSettings'), retryable: false }
-      }
-      if (status === 429) {
-        return { type: 'rate_limit', message: t('error.rateLimited'), retryable: true }
-      }
-      if (status >= 500) {
-        return { type: 'server', message: t('error.server'), retryable: true }
-      }
-    }
-
-    return { type: 'unknown', message: t('error.unexpected'), retryable: true }
-  }
-
   getLastError(): QuotaError | null {
     // Return dynamic message for rate limit errors
     if (this.lastError?.type === 'rate_limit' && this.rateLimitedUntil > 0) {
@@ -500,57 +427,47 @@ export class QuotaService {
     return t('error.rateLimitRetrySec', { sec: remainingSec })
   }
 
-  // Forget quota data from the previous account/auth source
-  clear(): void {
+  // Forget everything tied to the previous account/auth source; the caller then forces a refresh
+  resetForAccountChange(): void {
+    this.accountGeneration++
+    this.pendingFetch = null
     this.cachedQuota = null
     this.lastFetchTime = 0
     this.lastError = null
     settingsStore.set('lastQuotaData', null)
+    settingsStore.set('notifiedLevels', {})
   }
 
   getCachedQuota(): QuotaInfo | null {
     if (!this.cachedQuota) return null
     // Recalculate time-dependent fields on every read
+    const { fiveHour, sevenDay, sevenDayOpus } = this.cachedQuota
+    const staleAfterMs = 2 * settingsStore.get('refreshInterval') * 1000
     const result: QuotaInfo = {
       ...this.cachedQuota,
       error: this.getLastError() ?? undefined,
-      fiveHour: {
-        ...this.cachedQuota.fiveHour,
-        resetsIn: formatTimeUntil(this.cachedQuota.fiveHour.resetsAt),
-        resetProgress: calculateResetProgress(this.cachedQuota.fiveHour.resetsAt, 5)
-      },
-      sevenDay: {
-        ...this.cachedQuota.sevenDay,
-        resetsIn: formatTimeUntil(this.cachedQuota.sevenDay.resetsAt),
-        resetProgress: calculateResetProgress(this.cachedQuota.sevenDay.resetsAt, 7 * 24)
-      }
+      stale: Date.now() - this.cachedQuota.lastUpdated.getTime() > staleAfterMs,
+      fiveHour: buildPeriod(fiveHour.utilization, fiveHour.resetsAt, 5),
+      sevenDay: buildPeriod(sevenDay.utilization, sevenDay.resetsAt, 7 * 24)
     }
-    if (this.cachedQuota.sevenDayOpus) {
-      result.sevenDayOpus = {
-        ...this.cachedQuota.sevenDayOpus,
-        resetsIn: formatTimeUntil(this.cachedQuota.sevenDayOpus.resetsAt),
-        resetProgress: calculateResetProgress(this.cachedQuota.sevenDayOpus.resetsAt, 7 * 24)
-      }
+    if (sevenDayOpus) {
+      result.sevenDayOpus = buildPeriod(sevenDayOpus.utilization, sevenDayOpus.resetsAt, 7 * 24)
     }
     return result
   }
 
   getQuotaLevel(): 'normal' | 'warning' | 'critical' {
-    if (!this.cachedQuota) {
+    const quota = this.getCachedQuota()
+    if (!quota) {
       return 'normal'
     }
 
-    let maxUtilization = Math.max(
-      this.cachedQuota.fiveHour.utilization,
-      this.cachedQuota.sevenDay.utilization
-    )
-    if (this.cachedQuota.sevenDayOpus) {
-      maxUtilization = Math.max(maxUtilization, this.cachedQuota.sevenDayOpus.utilization)
+    let maxUtilization = Math.max(quota.fiveHour.utilization, quota.sevenDay.utilization)
+    if (quota.sevenDayOpus) {
+      maxUtilization = Math.max(maxUtilization, quota.sevenDayOpus.utilization)
     }
 
-    if (maxUtilization >= CRITICAL_THRESHOLD) return 'critical'
-    if (maxUtilization >= WARNING_THRESHOLD) return 'warning'
-    return 'normal'
+    return getQuotaLevel(maxUtilization)
   }
 }
 

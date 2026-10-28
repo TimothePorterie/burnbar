@@ -21,25 +21,17 @@ export class SchedulerService {
     }
   }
 
-  getRefreshInterval(): number {
-    return this.refreshIntervalMs / 1000
-  }
-
   onRefresh(callback: RefreshCallback): void {
     this.callbacks.add(callback)
   }
 
-  offRefresh(callback: RefreshCallback): void {
-    this.callbacks.delete(callback)
-  }
-
-  start(): void {
+  start(force = false): void {
     if (this.intervalId) {
       return
     }
 
     // Initial fetch
-    this.refresh()
+    this.refresh(force)
 
     // Schedule recurring fetches
     this.intervalId = setInterval(() => {

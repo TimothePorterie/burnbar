@@ -63,6 +63,14 @@ describe('pure helpers', () => {
 })
 
 describe('QuotaService', () => {
+  it('classifies a native request timeout as a retryable network error', async () => {
+    fetchMock.mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+    const service = new QuotaService()
+    expect(await service.fetchQuota(true)).toBeNull()
+    expect(service.getLastError()).toMatchObject({ type: 'network', retryable: true })
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('parses a response with null resets_at', async () => {
     fetchMock.mockResolvedValueOnce(json(usage({ five_hour: { utilization: 0, resets_at: null } })))
     const quota = await new QuotaService().fetchQuota(true)
@@ -132,13 +140,39 @@ describe('QuotaService', () => {
     expect(service.getLastError()?.type).toBe('rate_limit')
   })
 
-  it('clear() forgets cached and persisted quota', async () => {
+  it('resetForAccountChange() forgets cached and persisted quota and notified levels', async () => {
     fetchMock.mockResolvedValueOnce(json(usage()))
+    store.notifiedLevels = { fiveHour: 'warning' }
     const service = new QuotaService()
     await service.fetchQuota(true)
     expect(store.lastQuotaData).not.toBeNull()
-    service.clear()
+    service.resetForAccountChange()
     expect(service.getCachedQuota()).toBeNull()
     expect(store.lastQuotaData).toBeNull()
+    expect(store.notifiedLevels).toEqual({})
+  })
+
+  it('drops a response that lands after an account change', async () => {
+    let respond!: (r: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise((resolve) => { respond = resolve }))
+    const service = new QuotaService()
+    const inFlight = service.fetchQuota(true)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    service.resetForAccountChange()
+    respond(json(usage()))
+    await inFlight
+    expect(service.getCachedQuota()).toBeNull()
+  })
+
+  it('shows 0% for a period whose reset time has passed, and flags stale data', async () => {
+    store.refreshInterval = 300
+    fetchMock.mockResolvedValueOnce(json(usage()))
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    vi.useFakeTimers({ now: Date.now() + 3 * HOUR })
+    const quota = service.getCachedQuota()
+    expect(quota?.fiveHour.utilization).toBe(0)
+    expect(quota?.sevenDay.utilization).toBe(32)
+    expect(quota?.stale).toBe(true)
   })
 })

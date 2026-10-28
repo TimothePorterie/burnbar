@@ -28,10 +28,5 @@ export const logger = {
   },
   debug: (message: string, ...args: unknown[]) => {
     log.debug(message, ...args)
-  },
-  getLogPath: () => {
-    return log.transports.file.getFile()?.path || ''
   }
 }
-
-export default logger

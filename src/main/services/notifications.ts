@@ -3,16 +3,9 @@ import { quotaService } from './quota-api'
 import { settingsStore } from './settings-store'
 import { logger } from './logger'
 import { t } from '../../shared/i18n'
-
-type QuotaLevel = 'normal' | 'warning' | 'critical'
+import { getQuotaLevel, type QuotaLevel } from '../../shared/quota'
 
 const LEVEL_PRIORITY: Record<QuotaLevel, number> = { normal: 0, warning: 1, critical: 2 }
-
-function getLevel(utilization: number): QuotaLevel {
-  if (utilization >= 90) return 'critical'
-  if (utilization >= 70) return 'warning'
-  return 'normal'
-}
 
 export class NotificationService {
   checkAndNotify(): void {
@@ -33,7 +26,7 @@ export class NotificationService {
   }
 
   private checkPeriod(levels: Record<string, QuotaLevel>, key: string, labelKey: string, utilization: number): void {
-    const newLevel = getLevel(utilization)
+    const newLevel = getQuotaLevel(utilization)
     const previousLevel = levels[key] ?? 'normal'
     levels[key] = newLevel
 

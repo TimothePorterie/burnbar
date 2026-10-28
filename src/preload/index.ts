@@ -51,6 +51,11 @@ const api = {
     ipcRenderer.invoke('set-enable-notifications', enabled),
   setLanguage: (lang: string): Promise<boolean> =>
     ipcRenderer.invoke('set-language', lang),
+  onLanguageChanged: (callback: (lang: 'en' | 'fr') => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, lang: 'en' | 'fr'): void => callback(lang)
+    ipcRenderer.on('language-changed', handler)
+    return () => ipcRenderer.removeListener('language-changed', handler)
+  },
 
   // Auth
   startLogin: (): Promise<boolean> => ipcRenderer.invoke('auth-start-login'),

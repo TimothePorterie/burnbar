@@ -22,6 +22,7 @@ interface SettingsStoreSchema {
 export type { PersistedQuotaData }
 
 export const settingsStore = new Store<SettingsStoreSchema>({
+  clearInvalidConfig: true,
   defaults: {
     refreshInterval: 300,
     launchAtLogin: false,

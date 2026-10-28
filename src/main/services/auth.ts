@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import Store from 'electron-store'
 import { logger } from './logger'
 import { t } from '../../shared/i18n'
+import { redactToken } from './token-utils'
 
 export type AuthState = 'authenticated' | 'unauthenticated' | 'expired' | 'refreshing'
 
@@ -32,12 +33,6 @@ interface TokenResponse {
 }
 
 type StateChangeCallback = (state: AuthState) => void
-
-// Redact tokens for safe logging
-function redactToken(token: string): string {
-  if (!token || token.length < 10) return '[REDACTED]'
-  return `${token.substring(0, 4)}...${token.substring(token.length - 4)}`
-}
 
 export class AuthService {
   private static readonly AUTH_URL = 'https://claude.ai/oauth/authorize'
@@ -79,15 +74,20 @@ export class AuthService {
       try {
         // Verify we can decrypt tokens
         this.decryptToken(tokens.accessToken)
-        if (tokens.expiresAt && Date.now() > tokens.expiresAt - 5 * 60 * 1000) {
-          this.setState('expired')
-        } else {
-          this.setState('authenticated')
-        }
       } catch {
-        logger.warn('Failed to decrypt stored auth tokens, clearing')
-        this.store.set('tokens', null)
-        this.setState('unauthenticated')
+        if (safeStorage.isEncryptionAvailable()) {
+          logger.warn('Failed to decrypt stored auth tokens, clearing')
+          this.store.set('tokens', null)
+          logger.info(`Auth service initialized, state: ${this.state}`)
+          return
+        }
+        // Keychain access not ready yet: keep the tokens, decryption is retried on use
+        logger.warn('safeStorage unavailable, keeping stored auth tokens')
+      }
+      if (tokens.expiresAt && Date.now() > tokens.expiresAt - 5 * 60 * 1000) {
+        this.setState('expired')
+      } else {
+        this.setState('authenticated')
       }
     }
 
@@ -157,27 +157,20 @@ export class AuthService {
     }
 
     // CSRF protection: verify state matches what we sent
-    if (state && state !== this.stateParam) {
+    if (!state || state !== this.stateParam) {
       logger.error('OAuth state mismatch — possible CSRF attack')
       this.clearLoginState()
       return { success: false, error: t('auth.invalidCode') }
     }
 
     try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 30000)
-
       const body: Record<string, string> = {
         grant_type: 'authorization_code',
         code,
         client_id: AuthService.CLIENT_ID,
         redirect_uri: AuthService.REDIRECT_URI,
-        code_verifier: this.codeVerifier
-      }
-
-      // Include state if present
-      if (state) {
-        body.state = state
+        code_verifier: this.codeVerifier,
+        state
       }
 
       const response = await fetch(AuthService.TOKEN_URL, {
@@ -186,10 +179,8 @@ export class AuthService {
           'Content-Type': 'application/x-www-form-urlencoded'
         },
         body: new URLSearchParams(body),
-        signal: controller.signal
+        signal: AbortSignal.timeout(30000)
       })
-
-      clearTimeout(timeoutId)
 
       if (!response.ok) {
         const errorText = await response.text()
@@ -221,7 +212,7 @@ export class AuthService {
     } catch (error) {
       this.clearLoginState()
 
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof Error && error.name === 'TimeoutError') {
         logger.error('Token exchange timed out')
         return { success: false, error: t('auth.timeout') }
       }
@@ -269,9 +260,6 @@ export class AuthService {
         return false
       }
 
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 30000)
-
       const response = await fetch(AuthService.TOKEN_URL, {
         method: 'POST',
         headers: {
@@ -282,10 +270,8 @@ export class AuthService {
           refresh_token: refreshToken,
           client_id: AuthService.CLIENT_ID
         }),
-        signal: controller.signal
+        signal: AbortSignal.timeout(30000)
       })
-
-      clearTimeout(timeoutId)
 
       // User logged out while the request was in flight — don't resurrect the session
       if (generation !== this.logoutGeneration) return false
@@ -293,7 +279,8 @@ export class AuthService {
       if (!response.ok) {
         const errorText = await response.text()
         logger.error(`Auth token refresh failed: ${response.status} - ${errorText.slice(0, 200)}`)
-        this.setState('expired')
+        // A server error says nothing about the refresh token either: keep it and retry later
+        this.setState(response.status >= 500 ? previousState : 'expired')
         return false
       }
 
@@ -315,7 +302,7 @@ export class AuthService {
       logger.info('Auth token refreshed successfully')
       return true
     } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (error instanceof Error && error.name === 'TimeoutError') {
         logger.error('Auth token refresh timed out')
       } else {
         logger.error('Auth token refresh error:', error instanceof Error ? error.message : String(error))
@@ -381,12 +368,6 @@ export class AuthService {
     return this.store.get('userInfo')
   }
 
-  updateUserInfo(info: Partial<StoredUserInfo>): void {
-    if (!this.store) return
-    const existing = this.store.get('userInfo') || {}
-    this.store.set('userInfo', { ...existing, ...info })
-  }
-
   hasTokens(): boolean {
     if (!this.store) return false
     return this.store.get('tokens') !== null
@@ -394,10 +375,6 @@ export class AuthService {
 
   onStateChange(callback: StateChangeCallback): void {
     this.stateCallbacks.push(callback)
-  }
-
-  isLoginInProgress(): boolean {
-    return this.codeVerifier !== null
   }
 
   private setState(newState: AuthState): void {

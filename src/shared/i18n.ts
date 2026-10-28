@@ -6,10 +6,13 @@ const en: Record<string, string> = {
   'popup.session': 'Session (5h)',
   'popup.weekly': 'Weekly (7d)',
   'popup.opus': 'Opus (7d)',
-  'popup.resetsIn': 'Resets in',
+  'popup.resetsIn': 'Resets in {time}',
   'popup.overage': 'Overage',
   'popup.noLimit': '(no limit)',
-  'popup.lastUpdated': 'Last updated: {time}',
+  'popup.lastUpdated': 'Updated {time}',
+  'popup.settings': 'Settings',
+  'popup.levelWarn': 'High',
+  'popup.levelCrit': 'Critical',
   'popup.notConnected': 'Not Connected',
   'popup.notConnectedDesc': 'Log in to monitor your Claude Code quotas',
   'popup.login': 'Log In',
@@ -61,6 +64,15 @@ const en: Record<string, string> = {
   'settings.authModeApp': 'Claude Bar (OAuth)',
   'settings.authModeCli': 'Claude Code (Keychain)',
   'settings.cliHint': 'Run `claude` in a terminal to log in',
+  'settings.account': 'Account',
+  'settings.source': 'Source',
+  'settings.cliModeHint': 'Run `claude` then `claude login` in a terminal',
+  'settings.general': 'General',
+  'settings.refreshShort': 'Refresh every',
+  'settings.alerts': 'Alerts',
+  'settings.alertsDesc': 'At 70% and 90% usage',
+  'settings.openAtLogin': 'Open at login',
+  'settings.checking': 'Checking\u2026',
 
   // Tray
   'tray.refresh': 'Refresh',
@@ -80,6 +92,7 @@ const en: Record<string, string> = {
   'tray.weekly': 'Weekly: {pct}% (resets in {resets})',
   'tray.opus': 'Opus: {pct}% (resets in {resets})',
   'tray.updated': 'Updated: {time}',
+  'tray.stale': 'Data may be outdated',
   'tray.detailedFmt': '5h: {five}% | 7d: {seven}%',
   'tray.detailedOpusFmt': '5h: {five}% | 7d: {seven}% | Opus: {opus}%',
 
@@ -110,6 +123,7 @@ const en: Record<string, string> = {
   'error.authFailed': 'Authentication failed.',
   'error.invalidCodeFormat': 'Invalid code format.',
   'error.cliTokenExpired': 'Claude Code token expired. Run `claude` to refresh it.',
+  'errors.unexpectedFormat': 'Unexpected response format.',
 
   // Auth
   'auth.noLoginInProgress': 'No login in progress. Please click "Log In" first.',
@@ -120,7 +134,8 @@ const en: Record<string, string> = {
   'auth.networkError': 'Network error. Please check your connection and try again.',
 
   // Time
-  'time.now': 'Now'
+  'time.now': 'Now',
+  'time.daysHours': '{d}d {h}h'
 }
 
 const fr: Record<string, string> = {
@@ -129,10 +144,13 @@ const fr: Record<string, string> = {
   'popup.session': 'Session (5h)',
   'popup.weekly': 'Hebdo (7j)',
   'popup.opus': 'Opus (7j)',
-  'popup.resetsIn': 'Reset dans',
+  'popup.resetsIn': 'Reset dans {time}',
   'popup.overage': 'D\u00e9passement',
   'popup.noLimit': '(sans limite)',
-  'popup.lastUpdated': 'Mis \u00e0 jour : {time}',
+  'popup.lastUpdated': 'Mis \u00e0 jour {time}',
+  'popup.settings': 'R\u00e9glages',
+  'popup.levelWarn': '\u00c9lev\u00e9',
+  'popup.levelCrit': 'Critique',
   'popup.notConnected': 'Non connect\u00e9',
   'popup.notConnectedDesc': 'Connectez-vous pour suivre vos quotas Claude Code',
   'popup.login': 'Se connecter',
@@ -184,6 +202,15 @@ const fr: Record<string, string> = {
   'settings.authModeApp': 'Claude Bar (OAuth)',
   'settings.authModeCli': 'Claude Code (Trousseau)',
   'settings.cliHint': 'Lancez `claude` dans un terminal pour vous connecter',
+  'settings.account': 'Compte',
+  'settings.source': 'Source',
+  'settings.cliModeHint': 'Lancez `claude` puis `claude login` dans un terminal',
+  'settings.general': 'G\u00e9n\u00e9ral',
+  'settings.refreshShort': 'Actualisation',
+  'settings.alerts': 'Alertes',
+  'settings.alertsDesc': '\u00c0 70\u00a0% et 90\u00a0% d\u2019utilisation',
+  'settings.openAtLogin': 'Lancer \u00e0 l\u2019ouverture',
+  'settings.checking': 'V\u00e9rification\u2026',
 
   // Tray
   'tray.refresh': 'Actualiser',
@@ -203,6 +230,7 @@ const fr: Record<string, string> = {
   'tray.weekly': 'Hebdo : {pct}% (reset dans {resets})',
   'tray.opus': 'Opus : {pct}% (reset dans {resets})',
   'tray.updated': 'Mis \u00e0 jour : {time}',
+  'tray.stale': 'Donn\u00e9es peut-\u00eatre obsol\u00e8tes',
   'tray.detailedFmt': '5h: {five}% | 7j: {seven}%',
   'tray.detailedOpusFmt': '5h: {five}% | 7j: {seven}% | Opus: {opus}%',
 
@@ -233,6 +261,7 @@ const fr: Record<string, string> = {
   'error.authFailed': '\u00c9chec de l\u2019authentification.',
   'error.invalidCodeFormat': 'Format de code invalide.',
   'error.cliTokenExpired': 'Jeton Claude Code expir\u00e9. Lancez `claude` pour le rafra\u00eechir.',
+  'errors.unexpectedFormat': 'Format de r\u00e9ponse inattendu.',
 
   // Auth
   'auth.noLoginInProgress': 'Aucune connexion en cours. Cliquez d\u2019abord sur \u00ab\u00a0Se connecter\u00a0\u00bb.',
@@ -243,7 +272,8 @@ const fr: Record<string, string> = {
   'auth.networkError': 'Erreur r\u00e9seau. V\u00e9rifiez votre connexion et r\u00e9essayez.',
 
   // Time
-  'time.now': 'Maintenant'
+  'time.now': 'Maintenant',
+  'time.daysHours': '{d}j {h}h'
 }
 
 const translations: Record<Locale, Record<string, string>> = { en, fr }
@@ -268,6 +298,7 @@ export function t(key: string, params?: Record<string, string | number>): string
 }
 
 export function applyI18n(): void {
+  document.documentElement.lang = currentLocale
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     const key = el.getAttribute('data-i18n')!
     el.textContent = t(key)

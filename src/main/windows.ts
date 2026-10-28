@@ -100,7 +100,8 @@ export class WindowManager {
     this.ipcSetup = true
 
     // Handle content height reports from popup
-    ipcMain.on('popup-content-height', (_event, height: number) => {
+    ipcMain.on('popup-content-height', (_event, height: unknown) => {
+      if (typeof height !== 'number' || !Number.isFinite(height)) return
       if (this.popupWindow && !this.popupWindow.isDestroyed()) {
         const popupWidth = 320
         const maxHeight = 600
@@ -152,6 +153,9 @@ export class WindowManager {
         }
       })
     })
+
+    // The renderers need no camera, notifications, geolocation...
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
 
     // Block navigation to external URLs
     app.on('web-contents-created', (_event, contents) => {
@@ -262,8 +266,8 @@ export class WindowManager {
     }
 
     this.settingsWindow = new BrowserWindow({
-      width: 450,
-      height: 500,
+      width: 420,
+      height: 490,
       title: 'Claude Bar Settings',
       resizable: false,
       minimizable: true,

@@ -21,6 +21,9 @@ if (!gotTheLock) {
     app.dock.hide()
   }
 
+  process.on('unhandledRejection', (reason) => logger.error('Unhandled rejection:', reason))
+  process.on('uncaughtException', (error) => logger.error('Uncaught exception:', error))
+
   app.whenReady().then(() => {
     logger.info(`Claude Bar v${app.getVersion()} starting...`)
 
@@ -58,10 +61,13 @@ if (!gotTheLock) {
     powerMonitor.on('resume', () => {
       logger.info('System resumed from sleep, restarting scheduler')
       schedulerService.stop()
-      setTimeout(() => schedulerService.start(), 2000)
+      setTimeout(() => schedulerService.start(true), 2000)
     })
 
     logger.info('Claude Bar started successfully')
+  }).catch((error) => {
+    logger.error('Startup failed:', error)
+    app.quit()
   })
 
   // Registering the listener keeps the menu bar app alive when windows close

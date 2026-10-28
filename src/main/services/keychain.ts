@@ -1,6 +1,7 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { logger } from './logger'
+import { redactToken } from './token-utils'
 
 const execFileAsync = promisify(execFile)
 
@@ -25,12 +26,6 @@ function isValidToken(token: string): boolean {
 function isValidEmail(email: string): boolean {
   if (!email || typeof email !== 'string') return false
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length < 256
-}
-
-// Sanitize string for safe logging (redact sensitive data)
-function redactToken(token: string): string {
-  if (!token || token.length < 10) return '[REDACTED]'
-  return `${token.substring(0, 4)}...${token.substring(token.length - 4)}`
 }
 
 // Prototype pollution-safe JSON parsing
