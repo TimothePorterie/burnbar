@@ -1,6 +1,6 @@
 {
   "name": "claude-bar",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "macOS Menu Bar app for Claude Code quotas",
   "main": "dist/main/index.js",
   "author": "Claude Bar",
