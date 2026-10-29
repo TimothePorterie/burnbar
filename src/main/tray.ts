@@ -1,4 +1,5 @@
-import { Tray, Menu, nativeImage, app } from 'electron'
+import { Tray, Menu, nativeImage, app, BrowserWindow } from 'electron'
+import { statusService } from './services/status'
 import { quotaService } from './services/quota-api'
 import { schedulerService } from './services/scheduler'
 import { updaterService } from './services/updater'
@@ -6,10 +7,14 @@ import { logger } from './services/logger'
 import { windowManager } from './windows'
 import { settingsStore } from './services/settings-store'
 import { notificationService } from './services/notifications'
-import { t, getLocale } from '../shared/i18n'
+import { t } from '../shared/i18n'
+import { formatRetry, formatUpdated } from '../shared/quota'
 import { renderGaugeBitmap } from './tray-icon'
 
 type DisplayMode = 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
+
+// Tooltips are plain text: drop the backticks that mark `claude` as code in the popup
+const plainText = (message: string): string => message.replaceAll('`', '')
 
 export class TrayManager {
   private tray: Tray | null = null
@@ -40,7 +45,8 @@ export class TrayManager {
 
     this.tray = new Tray(this.createIcon(), '18f3a40d-d04b-4b87-972e-79bd0432eed3')
     this.refreshDisplay()
-    this.syncMinuteTimer()
+    // Countdowns, the data age and the stale dim move without a fetch
+    this.minuteTimer = setInterval(() => this.refreshDisplay(), 60000)
 
     // Left click shows popup (scheduler handles periodic refresh)
     this.tray.on('click', () => {
@@ -56,6 +62,11 @@ export class TrayManager {
 
     // Listen for quota updates
     schedulerService.onRefresh(() => {
+      void statusService.refresh().then(() => {
+        this.updateTooltip()
+        const quota = quotaService.getCachedQuota()
+        if (quota) windowManager.sendToPopup('quota-updated', quota)
+      })
       this.refreshDisplay()
       // Send updated quota to popup window
       const quota = quotaService.getCachedQuota()
@@ -85,25 +96,26 @@ export class TrayManager {
   private setDisplayMode(mode: DisplayMode): void {
     settingsStore.set('displayMode', mode)
     this.updateTitle()
-    this.syncMinuteTimer()
     logger.info(`Display mode changed to: ${mode}`)
-  }
-
-  // The countdown only moves in time-remaining mode
-  private syncMinuteTimer(): void {
-    const needed = this.getDisplayMode() === 'time-remaining'
-    if (needed && !this.minuteTimer) {
-      this.minuteTimer = setInterval(() => this.updateTitle(), 60000)
-    } else if (!needed && this.minuteTimer) {
-      clearInterval(this.minuteTimer)
-      this.minuteTimer = null
-    }
   }
 
   refreshDisplay(): void {
     this.updateTitle()
     this.updateIcon()
     this.updateTooltip()
+  }
+
+  setShowRemaining(enabled: boolean): void {
+    settingsStore.set('showRemaining', enabled)
+    windowManager.closePopup()
+    this.refreshDisplay()
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('show-remaining-changed', enabled)
+    }
+  }
+
+  private displayPercentage(utilization: number): number {
+    return Math.round(settingsStore.get('showRemaining') ? 100 - utilization : utilization)
   }
 
   // Errors other than rate limits (cached data is still valid then), or data too old to trust
@@ -122,14 +134,14 @@ export class TrayManager {
       return
     }
 
-    const fiveHour = quota.fiveHour ? `${Math.round(quota.fiveHour.utilization)}%` : '—'
-    const sevenDay = Math.round(quota.sevenDay.utilization)
+    const fiveHour = quota.fiveHour ? `${this.displayPercentage(quota.fiveHour.utilization)}%` : '—'
+    const sevenDay = this.displayPercentage(quota.sevenDay.utilization)
     let title: string
 
     switch (this.getDisplayMode()) {
       case 'detailed':
         title = [t('tray.detailedFmt', { five: fiveHour, seven: sevenDay }),
-          ...quota.models.map(model => `${model.label}: ${Math.round(model.period.utilization)}%`)].join(' | ')
+          ...quota.models.map(model => `${model.label}: ${this.displayPercentage(model.period.utilization)}%`)].join(' | ')
         break
       case 'compact':
         title = fiveHour
@@ -160,26 +172,31 @@ export class TrayManager {
     if (!quota) {
       const lastError = quotaService.getLastError()
       if (lastError) {
-        this.tray.setToolTip(`Claude Bar \u2014 ${lastError.message}`)
+        this.tray.setToolTip([`Claude Bar \u2014 ${plainText(lastError.message)}`, formatRetry(lastError.retryAt)].filter(Boolean).join('\n'))
       } else {
         this.tray.setToolTip(t('tray.clickToView'))
       }
       return
     }
 
-    const sevenDay = Math.round(quota.sevenDay.utilization)
+    const suffix = settingsStore.get('showRemaining') ? 'Remaining' : ''
+    const sevenDay = this.displayPercentage(quota.sevenDay.utilization)
     const lines = [
       quota.fiveHour
-        ? t('tray.session', { pct: Math.round(quota.fiveHour.utilization), resets: quota.fiveHour.resetsIn })
+        ? t(`tray.session${suffix}`, { pct: this.displayPercentage(quota.fiveHour.utilization), resets: quota.fiveHour.resetsIn })
         : t('popup.noSession'),
-      t('tray.weekly', { pct: sevenDay, resets: quota.sevenDay.resetsIn })
+      t(`tray.weekly${suffix}`, { pct: sevenDay, resets: quota.sevenDay.resetsIn })
     ]
     for (const model of quota.models) {
-      lines.push(t('tray.model', { label: model.label, pct: Math.round(model.period.utilization), resets: model.period.resetsIn }))
+      lines.push(t(`tray.model${suffix}`, { label: model.label, pct: this.displayPercentage(model.period.utilization), resets: model.period.resetsIn }))
     }
-    lines.push(t('tray.updated', { time: quota.lastUpdated.toLocaleTimeString(getLocale()) }))
-    if (quota.error && quota.error.type !== 'rate_limit') {
-      lines.push(quota.error.message)
+    if (quota.status && quota.status.indicator !== 'none') {
+      lines.push(t('tray.anthropicStatus', { name: quota.status.incident?.name ?? t('status.disruption') }))
+    }
+    lines.push(formatUpdated(quota.lastUpdated))
+    if (quota.error) {
+      lines.push(plainText(quota.error.message))
+      if (quota.error.retryAt) lines.push(formatRetry(quota.error.retryAt))
     }
     if (quota.stale) {
       lines.push(t('tray.stale'))
@@ -196,6 +213,12 @@ export class TrayManager {
         click: () => {
           schedulerService.refresh(true)
         }
+      },
+      {
+        label: t('tray.showRemaining'),
+        type: 'checkbox',
+        checked: settingsStore.get('showRemaining'),
+        click: (item) => this.setShowRemaining(item.checked)
       },
       { type: 'separator' },
       {

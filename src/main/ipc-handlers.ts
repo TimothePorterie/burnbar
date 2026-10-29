@@ -6,6 +6,7 @@ import { updaterService } from './services/updater'
 import { logger } from './services/logger'
 import { windowManager } from './windows'
 import { trayManager } from './tray'
+import { isStatusPageUrl } from './services/status'
 import { settingsStore as store } from './services/settings-store'
 import type { Locale } from '../shared/i18n'
 import { setLocale } from '../shared/i18n'
@@ -110,7 +111,8 @@ export function setupIpcHandlers(): void {
         launchAtLoginStatus: loginItemStatus(),
         enableNotifications: store.get('enableNotifications'),
         language: store.get('language'),
-        theme: store.get('theme')
+        theme: store.get('theme'),
+        showRemaining: store.get('showRemaining')
       }
     } catch (error) {
       logger.error('IPC get-settings error:', error)
@@ -119,9 +121,27 @@ export function setupIpcHandlers(): void {
         launchAtLogin: false,
         enableNotifications: true,
         language: 'en',
-        theme: 'system'
+        theme: 'system',
+        showRemaining: false
       }
     }
+  })
+
+  ipcMain.handle('open-status-page', async (_event, url: unknown) => {
+    if (!isStatusPageUrl(url)) return false
+    try {
+      await shell.openExternal(url)
+      return true
+    } catch (error) {
+      logger.debug('Could not open status page:', error)
+      return false
+    }
+  })
+
+  ipcMain.handle('set-show-remaining', (_event, enabled: unknown) => {
+    if (!isValidBoolean(enabled)) return false
+    trayManager.setShowRemaining(enabled)
+    return true
   })
 
   ipcMain.handle('set-refresh-interval', (_event, seconds: unknown) => {

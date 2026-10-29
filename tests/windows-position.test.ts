@@ -4,13 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   trayBounds: { x: 0, y: 0, width: 0, height: 0 } as Electron.Rectangle | null,
   primary: vi.fn(() => ({ workArea: { x: 1200, y: 40, width: 1512, height: 900 } })),
-  nearest: vi.fn(() => ({ workArea: { x: -1440, y: 25, width: 1440, height: 875 } }))
+  nearest: vi.fn(() => ({ workArea: { x: -1440, y: 25, width: 1440, height: 875 } })),
+  refresh: vi.fn(async () => {}),
+  error: null as { type: string; message: string; retryable: boolean } | null
 }))
 vi.mock('electron', () => ({
   app: { isReady: () => false, once: vi.fn(), isPackaged: true, focus: vi.fn() },
   screen: { getPrimaryDisplay: mocks.primary, getDisplayNearestPoint: mocks.nearest },
   BrowserWindow: class extends EventEmitter {
-    webContents = new EventEmitter()
+    webContents = Object.assign(new EventEmitter(), { send: vi.fn() })
     isDestroyed = () => false
     getBounds = () => ({ width: 320, height: 300 })
     setPosition = vi.fn()
@@ -23,14 +25,25 @@ vi.mock('electron', () => ({
 }))
 vi.mock('../src/main/tray', () => ({ trayManager: { getBounds: () => mocks.trayBounds } }))
 vi.mock('../src/main/services/logger', () => ({ logger: {} }))
-vi.mock('../src/main/services/quota-api', () => ({ quotaService: { getCachedQuota: () => null } }))
-vi.mock('../src/main/services/scheduler', () => ({ schedulerService: {} }))
+vi.mock('../src/main/services/quota-api', () => ({ quotaService: { getCachedQuota: () => null, getLastError: () => mocks.error } }))
+vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { refresh: mocks.refresh } }))
 
 const { WindowManager } = await import('../src/main/windows')
 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.trayBounds = { x: 0, y: 0, width: 0, height: 0 }
+  mocks.error = null
+})
+
+describe('popup reveal', () => {
+  it('requests a non-forced refresh and resends the error when nothing is cached', () => {
+    mocks.error = { type: 'network', message: 'Offline', retryable: true }
+    const popup = new WindowManager().createPopupWindow()
+    popup.emit('ready-to-show')
+    expect(mocks.refresh).toHaveBeenCalledExactlyOnceWith()
+    expect(popup.webContents.send).toHaveBeenCalledExactlyOnceWith('quota-error', mocks.error)
+  })
 })
 
 describe('popup position', () => {

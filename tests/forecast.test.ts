@@ -41,3 +41,23 @@ describe('quota forecast', () => {
     expect(getForecast(80, 50, reset, 0)).toBeUndefined()
   })
 })
+
+describe('relative time formatting', () => {
+  const now = Date.parse('2026-10-29T12:00:00Z')
+
+  it('formats the data age and the next try', async () => {
+    const { formatRetry, formatUpdated } = await import('../src/shared/quota')
+    const { setLocale } = await import('../src/shared/i18n')
+    setLocale('en')
+    expect(formatUpdated(now - 30_000, now)).toBe('Updated just now')
+    expect(formatUpdated(now + HOUR, now)).toBe('Updated just now')
+    expect(formatUpdated(new Date(now - 25 * HOUR - 60_000), now)).toBe('Updated 1d 1h ago')
+    expect(formatRetry(undefined, now)).toBe('')
+    expect(formatRetry(now - 1000, now)).toBe('Next try in under a minute.')
+    expect(formatRetry(now + 2 * HOUR + 5 * 60_000, now)).toBe('Next try in 2h 5m.')
+    setLocale('fr')
+    expect(formatUpdated(now - 25 * 60_000, now)).toBe('Mis à jour il y a 25m')
+    expect(formatRetry(now + 10 * 60_000, now)).toBe('Nouvel essai dans 10m.')
+    setLocale('en')
+  })
+})

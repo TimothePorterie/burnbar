@@ -90,6 +90,11 @@ h2 {
   white-space: nowrap;
 }
 
+/* A problem message must stay readable in full: it says what to do */
+.status-info .row-sub.wrap {
+  white-space: normal;
+}
+
 .status-dot {
   flex-shrink: 0;
   width: 8px;

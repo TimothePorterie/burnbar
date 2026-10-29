@@ -3,6 +3,7 @@ import type { QuotaInfo, QuotaError } from '../shared/types'
 export type { QuotaErrorType, QuotaError, QuotaPeriod, ExtraUsageInfo, QuotaInfo } from '../shared/types'
 
 export interface Settings {
+  showRemaining: boolean
   refreshInterval: number
   launchAtLogin: boolean
   launchAtLoginStatus?: 'not-registered' | 'enabled' | 'requires-approval' | 'not-found'
@@ -41,6 +42,12 @@ const api = {
   },
 
   // Settings
+  setShowRemaining: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('set-show-remaining', enabled),
+  onShowRemainingChanged: (callback: (enabled: boolean) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, enabled: boolean): void => callback(enabled)
+    ipcRenderer.on('show-remaining-changed', handler)
+    return () => ipcRenderer.removeListener('show-remaining-changed', handler)
+  },
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('get-settings'),
   setRefreshInterval: (seconds: number): Promise<boolean> =>
     ipcRenderer.invoke('set-refresh-interval', seconds),
@@ -73,6 +80,7 @@ const api = {
   },
 
   // Navigation
+  openStatusPage: (url: string): Promise<boolean> => ipcRenderer.invoke('open-status-page', url),
   openSettings: (): Promise<boolean> => ipcRenderer.invoke('open-settings'),
 
   // Window

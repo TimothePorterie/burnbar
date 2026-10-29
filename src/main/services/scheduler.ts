@@ -1,5 +1,7 @@
+import { powerMonitor } from 'electron'
 import { quotaService } from './quota-api'
 import { logger } from './logger'
+import { IDLE_REFRESH_MAX_AGE_MS } from '../../shared/quota'
 
 type RefreshCallback = () => void
 
@@ -12,6 +14,9 @@ export class SchedulerService {
   private callbacks: Set<RefreshCallback> = new Set()
   private consecutiveErrors: number = 0
   private backoffRetryId: NodeJS.Timeout | null = null
+  private screenLocked = false
+  private skippingIdleRefresh = false
+  private inFlight: Promise<void> | null = null
 
   setRefreshInterval(seconds: number): void {
     this.refreshIntervalMs = seconds * 1000
@@ -25,18 +30,20 @@ export class SchedulerService {
     this.callbacks.add(callback)
   }
 
+  setScreenLocked(locked: boolean): void {
+    this.screenLocked = locked
+  }
+
   start(force = false): void {
     if (this.intervalId) {
       return
     }
 
     // Initial fetch
-    this.refresh(force)
+    this.refreshScheduled(force)
 
     // Schedule recurring fetches
-    this.intervalId = setInterval(() => {
-      this.refresh()
-    }, this.refreshIntervalMs)
+    this.restartInterval()
   }
 
   stop(): void {
@@ -57,9 +64,21 @@ export class SchedulerService {
       clearTimeout(this.backoffRetryId)
       this.backoffRetryId = null
     }
+    quotaService.nextRetryAt = 0
   }
 
-  async refresh(force = false): Promise<void> {
+  // Concurrent callers (popup open, manual refresh, timer) share one run
+  refresh(force = false): Promise<void> {
+    this.inFlight ??= this.runRefresh(force).finally(() => { this.inFlight = null })
+    return this.inFlight
+  }
+
+  private async runRefresh(force: boolean): Promise<void> {
+    if (this.skippingIdleRefresh) {
+      logger.info('Quota refresh resumed after inactivity')
+      this.skippingIdleRefresh = false
+      quotaService.idlePaused = false
+    }
     try {
       const quota = await quotaService.fetchQuota(force)
 
@@ -78,14 +97,15 @@ export class SchedulerService {
           logger.info(`${reason} — retry in ${Math.ceil(retryInMs / 1000)}s`)
           this.rateLimitRetryId = setTimeout(() => {
             this.rateLimitRetryId = null
-            this.refresh()
+            quotaService.nextRetryAt = 0
+            this.refreshScheduled()
           }, retryInMs)
+          quotaService.nextRetryAt = Date.now() + retryInMs
         }
-      } else if (quota?.error && quota.error.retryable) {
-        // Got cached data back but with an error — back off
-        this.handleRetryableError()
-      } else if (!quota && quotaService.getLastError()?.retryable) {
-        // No data at all + retryable error — back off
+      } else if (quotaService.wasThrottled()) {
+        // Served from cache without a request: keep the current backoff and timers
+      } else if ((quota ? quota.error : quotaService.getLastError())?.retryable) {
+        // Retryable error, with or without cached data — back off
         this.handleRetryableError()
       } else {
         // Success — reset backoff and restart interval
@@ -102,6 +122,19 @@ export class SchedulerService {
     }
   }
 
+  private refreshScheduled(force = false): void {
+    const lastUpdated = quotaService.getCachedQuota()?.lastUpdated.getTime()
+    if (!force && lastUpdated !== undefined && Date.now() - lastUpdated < IDLE_REFRESH_MAX_AGE_MS
+      && (this.screenLocked || powerMonitor.getSystemIdleTime() >= 600)) {
+      if (!this.skippingIdleRefresh) logger.info('Scheduled quota refresh skipped during inactivity')
+      this.skippingIdleRefresh = true
+      quotaService.idlePaused = true
+      this.restartInterval()
+      return
+    }
+    void this.refresh(force)
+  }
+
   private handleRetryableError(): void {
     this.consecutiveErrors++
     const multiplier = Math.min(2 ** (this.consecutiveErrors - 1), MAX_BACKOFF_MULTIPLIER)
@@ -113,8 +146,10 @@ export class SchedulerService {
     logger.warn(`Error backoff: attempt ${this.consecutiveErrors}, retry in ${Math.ceil(backoffMs / 1000)}s (${multiplier}x)`)
     this.backoffRetryId = setTimeout(() => {
       this.backoffRetryId = null
-      this.refresh()
+      quotaService.nextRetryAt = 0
+      this.refreshScheduled()
     }, backoffMs)
+    quotaService.nextRetryAt = Date.now() + backoffMs
   }
 
   private stopInterval(): void {
@@ -127,7 +162,7 @@ export class SchedulerService {
   private restartInterval(): void {
     if (this.intervalId) return // Already running
     this.intervalId = setInterval(() => {
-      this.refresh()
+      this.refreshScheduled()
     }, this.refreshIntervalMs)
   }
 

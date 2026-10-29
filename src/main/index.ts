@@ -60,6 +60,14 @@ if (!gotTheLock) {
       setTimeout(() => schedulerService.start(true), 2000)
     })
 
+    powerMonitor.on('lock-screen', () => schedulerService.setScreenLocked(true))
+    powerMonitor.on('unlock-screen', () => {
+      schedulerService.setScreenLocked(false)
+      void schedulerService.refresh()
+    })
+    // Back from another login session: the idle pause may have let the data age (throttle still applies)
+    powerMonitor.on('user-did-become-active', () => void schedulerService.refresh())
+
     logger.info('Claude Bar started successfully')
   }).catch((error) => {
     logger.error('Startup failed:', error)

@@ -4,6 +4,12 @@ import { logger } from './logger'
 import { redactToken } from './token-utils'
 
 const execFileAsync = promisify(execFile)
+// The first read can wait on a macOS access prompt; never let it hang the refresh forever
+const SECURITY_TIMEOUT_MS = 60_000
+
+// missing: no item (exit 44). denied: access refused (128 user canceled, 51 auth failed).
+// invalid: the item can't be parsed. failed: anything else, including the timeout.
+export type KeychainFailure = 'missing' | 'invalid' | 'denied' | 'failed'
 
 export interface Credentials {
   accessToken: string
@@ -52,6 +58,12 @@ function safeJsonParse(jsonStr: string): Record<string, unknown> | null {
 
 export class KeychainService {
   private static readonly SERVICE_NAME = 'Claude Code-credentials'
+  lastFailure: KeychainFailure | null = null
+
+  private fail(failure: KeychainFailure): null {
+    this.lastFailure = failure
+    return null
+  }
 
   async getCredentials(): Promise<Credentials | null> {
     try {
@@ -61,23 +73,23 @@ export class KeychainService {
         '-s',
         KeychainService.SERVICE_NAME,
         '-w'
-      ])
+      ], { timeout: SECURITY_TIMEOUT_MS })
 
       const jsonStr = stdout.trim()
       if (!jsonStr) {
-        return null
+        return this.fail('invalid')
       }
 
       const data = safeJsonParse(jsonStr)
       if (!data) {
         logger.error('Invalid or unsafe JSON in Keychain data')
-        return null
+        return this.fail('invalid')
       }
 
       const oauth = data.claudeAiOauth as Record<string, unknown> | undefined
       if (!oauth || typeof oauth !== 'object' || !oauth.accessToken) {
         logger.error('No claudeAiOauth credentials found in Keychain data')
-        return null
+        return this.fail('invalid')
       }
 
       const accessToken = String(oauth.accessToken)
@@ -86,7 +98,7 @@ export class KeychainService {
       // Validate tokens
       if (!isValidToken(accessToken)) {
         logger.error('Invalid access token format in Keychain')
-        return null
+        return this.fail('invalid')
       }
 
       if (refreshToken && !isValidToken(refreshToken)) {
@@ -107,14 +119,15 @@ export class KeychainService {
       }
 
       logger.debug(`Credentials loaded: token=${redactToken(accessToken)}`)
+      this.lastFailure = null
       return credentials
     } catch (error) {
       // Keychain item not found or access denied - this is expected for new users
       const errMsg = error instanceof Error ? error.message : String(error)
-      if (!errMsg.includes('could not be found')) {
-        logger.error('Failed to read credentials from Keychain:', errMsg)
-      }
-      return null
+      const code = (error as { code?: unknown }).code
+      if (code === 44 || errMsg.includes('could not be found')) return this.fail('missing')
+      logger.error('Failed to read credentials from Keychain:', errMsg)
+      return this.fail(code === 128 || code === 51 ? 'denied' : 'failed')
     }
   }
 
@@ -124,7 +137,7 @@ export class KeychainService {
         'find-generic-password',
         '-s',
         KeychainService.SERVICE_NAME
-      ])
+      ], { timeout: SECURITY_TIMEOUT_MS })
       return true
     } catch {
       return false

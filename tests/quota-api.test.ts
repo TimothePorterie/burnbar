@@ -4,15 +4,17 @@ const store: Record<string, unknown> = {}
 vi.mock('../src/main/services/settings-store', () => ({
   settingsStore: {
     get: (key: string) => store[key],
-    set: (key: string, value: unknown) => { store[key] = value }
+    set: (key: string, value: unknown) => { store[key] = value },
+    delete: (key: string) => { delete store[key] }
   }
 }))
 vi.mock('../src/main/services/logger', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }))
-const keychain = { getCredentials: vi.fn(), isTokenExpired: vi.fn() }
+const keychain = { getCredentials: vi.fn(), isTokenExpired: vi.fn(), lastFailure: null as string | null }
 vi.mock('../src/main/services/keychain', () => ({ keychainService: keychain }))
 
+const { setLocale } = await import('../src/shared/i18n')
 const { QuotaService, isValidUsageResponse, formatTimeUntil, calculateResetProgress } = await import(
   '../src/main/services/quota-api'
 )
@@ -31,6 +33,8 @@ beforeEach(() => {
   Object.assign(store, { rateLimitedUntil: 0, lastQuotaData: null })
   keychain.getCredentials.mockReset().mockResolvedValue({ accessToken: 'token-a' })
   keychain.isTokenExpired.mockReset().mockReturnValue(false)
+  keychain.lastFailure = null
+  setLocale('en')
   fetchMock.mockReset()
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -199,6 +203,7 @@ describe('QuotaService', () => {
     fetchMock.mockResolvedValueOnce(json(usage()))
     store.notifiedLevels = { fiveHour: 'warning' }
     store.resetNotifications = { fiveHour: { resetsAt: Date.now(), utilization: 75 } }
+    store.extraUsageNotified = { used: 4600, levels: ['started', '50', '90'] }
     const service = new QuotaService()
     await service.fetchQuota(true)
     expect(store.lastQuotaData).not.toBeNull()
@@ -207,6 +212,7 @@ describe('QuotaService', () => {
     expect(store.lastQuotaData).toBeNull()
     expect(store.notifiedLevels).toEqual({})
     expect(store.resetNotifications).toEqual({})
+    expect(store.extraUsageNotified).toBeUndefined()
   })
 
   it('resets the previous account data when the Keychain account changes', async () => {
@@ -244,5 +250,92 @@ describe('QuotaService', () => {
     expect(quota?.fiveHour?.utilization).toBe(0)
     expect(quota?.sevenDay.utilization).toBe(32)
     expect(quota?.stale).toBe(true)
+  })
+
+  it('reports a body that is not JSON as an unexpected response', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('<html>Bad gateway</html>', { status: 200 }))
+    const service = new QuotaService()
+    expect(await service.fetchQuota(true)).toBeNull()
+    expect(service.getLastError()).toMatchObject({
+      type: 'unknown', retryable: true, message: 'Anthropic sent an unexpected response. Update Claude Bar if this persists.'
+    })
+  })
+
+  it.each([
+    ['missing', 'auth', 'No Claude Code session found'],
+    ['invalid', 'auth', 'can\u2019t be read'],
+    ['denied', 'keychain', 'Keychain access was denied'],
+    ['failed', 'keychain', 'Couldn\u2019t read the Keychain']
+  ])('explains a %s Keychain read without calling the API', async (failure, type, message) => {
+    keychain.getCredentials.mockResolvedValue(null)
+    keychain.lastFailure = failure
+    const service = new QuotaService()
+    expect(await service.fetchQuota(true)).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(service.getLastError()?.type).toBe(type)
+    expect(service.getLastError()?.message).toContain(message)
+  })
+
+  it('translates the current error when the language changes', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'))
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    expect(service.getLastError()?.message).toBe('Offline, or Anthropic can\u2019t be reached.')
+    setLocale('fr')
+    expect(service.getLastError()?.message).toBe('Hors ligne, ou Anthropic injoignable.')
+  })
+
+  it('attaches the next automatic attempt to the error', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    fetchMock.mockResolvedValueOnce(json({}, 500)).mockResolvedValueOnce(json({}, 429))
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    expect(service.getLastError()?.retryAt).toBeUndefined()
+    service.nextRetryAt = Date.now() + 600_000
+    expect(service.getLastError()?.retryAt).toBe(Date.now() + 600_000)
+    service.nextRetryAt = 0
+    await service.fetchQuota(true)
+    expect(service.getLastError()).toMatchObject({ type: 'rate_limit', retryAt: Date.now() + 120_000 })
+  })
+
+  it('keeps utilization within 0-100% and drops an expired reset time', async () => {
+    fetchMock.mockResolvedValueOnce(json(usage({
+      five_hour: { utilization: 104, resets_at: new Date(Date.now() + HOUR).toISOString() },
+      seven_day: { utilization: -3, resets_at: new Date(Date.now() - 1000).toISOString() }
+    })))
+    const quota = await new QuotaService().fetchQuota(true)
+    expect(quota?.fiveHour?.utilization).toBe(100)
+    expect(quota?.sevenDay).toMatchObject({ utilization: 0, resetsIn: '—', resetProgress: 0 })
+    expect(Number.isNaN(quota?.sevenDay.resetsAt.getTime())).toBe(true)
+  })
+
+  it('still fetches after the clock was set back', async () => {
+    fetchMock.mockImplementation(async () => json(usage()))
+    vi.useFakeTimers({ now: Date.now() })
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    vi.setSystemTime(Date.now() - HOUR)
+    await service.fetchQuota()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not flag data stale while idle refreshes are paused', async () => {
+    store.refreshInterval = 300
+    fetchMock.mockResolvedValueOnce(json(usage()))
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    vi.useFakeTimers({ now: Date.now() + 20 * 60_000 })
+    expect(service.getCachedQuota()?.stale).toBe(true)
+    service.idlePaused = true
+    expect(service.getCachedQuota()?.stale).toBe(false)
+    vi.setSystemTime(Date.now() + 16 * 60_000)
+    expect(service.getCachedQuota()?.stale).toBe(true)
+  })
+
+  it('ignores a corrupted persisted quota instead of failing at startup', () => {
+    store.lastQuotaData = { sevenDay: { utilization: 'x' }, fetchedAt: Date.now() }
+    expect(new QuotaService().getCachedQuota()).toBeNull()
+    store.lastQuotaData = { sevenDay: { utilization: 10, resetsAt: null }, models: [{ key: 'k', label: 'K', period: null }], fetchedAt: Date.now() }
+    expect(new QuotaService().getCachedQuota()?.models).toEqual([])
   })
 })

@@ -1,9 +1,10 @@
 import { keychainService, Credentials } from './keychain'
 import { logger } from './logger'
+import { statusService } from './status'
 import { settingsStore, PersistedQuotaData } from './settings-store'
 import { t } from '../../shared/i18n'
-import { getQuotaLevel } from '../../shared/quota'
-import { classifyError, classifyHttpError } from './quota-errors'
+import { formatDuration, getQuotaLevel, IDLE_REFRESH_MAX_AGE_MS } from '../../shared/quota'
+import { classifyError, classifyHttpError, classifyKeychainFailure, type QuotaErrorState } from './quota-errors'
 export type { QuotaErrorType, QuotaError, QuotaPeriod, ExtraUsageInfo, QuotaInfo } from '../../shared/types'
 import type { QuotaError, QuotaPeriod, QuotaInfo } from '../../shared/types'
 
@@ -38,6 +39,10 @@ function isValidQuota(q: unknown): q is QuotaData {
   return typeof qObj.utilization === 'number' && Number.isFinite(qObj.utilization) && (typeof qObj.resets_at === 'string' || qObj.resets_at === null)
 }
 
+function isValidPersistedPeriod(p: { utilization?: unknown; resetsAt?: unknown } | null | undefined): boolean {
+  return !!p && isValidQuota({ utilization: p.utilization, resets_at: p.resetsAt })
+}
+
 function isValidExtraUsage(e: unknown): e is ExtraUsageData {
   if (!e || typeof e !== 'object') return false
   const eObj = e as Record<string, unknown>
@@ -55,14 +60,7 @@ export function formatTimeUntil(date: Date): string {
   const diffMs = date.getTime() - Date.now()
   if (Number.isNaN(diffMs)) return '—'
   if (diffMs <= 0) return t('time.now')
-
-  const diffMinutes = Math.floor(diffMs / (1000 * 60))
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-  if (diffDays > 0) return t('time.daysHours', { d: diffDays, h: diffHours % 24 })
-  if (diffHours > 0) return `${diffHours}h ${diffMinutes % 60}m`
-  return `${diffMinutes}m`
+  return formatDuration(diffMs)
 }
 
 export function calculateResetProgress(resetsAt: Date, periodHours: number): number {
@@ -73,10 +71,14 @@ export function calculateResetProgress(resetsAt: Date, periodHours: number): num
   return Math.round(Math.max(0, Math.min(100, (elapsed / periodMs) * 100)))
 }
 
-// A period whose reset time has passed restarts at 0% until the next fetch
+// A period whose reset time has passed has no active window until the next fetch: 0%, no reset time.
+// The API may report usage beyond the limit; the displayed share stays within 0-100%.
 function buildPeriod(utilization: number, resetsAt: Date, periodHours: number): QuotaPeriod {
+  if (resetsAt.getTime() <= Date.now()) {
+    return { utilization: 0, resetsAt: new Date(NaN), resetsIn: '—', resetProgress: 0 }
+  }
   return {
-    utilization: resetsAt.getTime() <= Date.now() ? 0 : utilization,
+    utilization: Math.min(100, Math.max(0, utilization)),
     resetsAt,
     resetsIn: formatTimeUntil(resetsAt),
     resetProgress: calculateResetProgress(resetsAt, periodHours)
@@ -89,12 +91,15 @@ export class QuotaService {
 
   private cachedQuota: QuotaInfo | null = null
   private lastFetchTime: number = 0
-  private lastError: QuotaError | null = null
+  private lastError: QuotaErrorState | null = null
   private _wasThrottled = false
   private rateLimitedUntil: number
   private rateLimitRemaining: number | null = null
   private pendingFetch: Promise<QuotaInfo | null> | null = null
   private accountGeneration = 0
+  // Set by the scheduler: next automatic attempt, and whether idle refreshes are paused
+  nextRetryAt = 0
+  idlePaused = false
 
   constructor() {
     // Restore persisted rate limit, but clear if already expired
@@ -109,12 +114,13 @@ export class QuotaService {
 
     // Restore persisted quota data (if < 24h old)
     const lastQuota = settingsStore.get('lastQuotaData') as PersistedQuotaData | null
-    if (lastQuota && Date.now() - lastQuota.fetchedAt < 24 * 60 * 60 * 1000) {
+    if (lastQuota && Date.now() - lastQuota.fetchedAt < 24 * 60 * 60 * 1000 && isValidPersistedPeriod(lastQuota.sevenDay) &&
+      (!lastQuota.fiveHour || isValidPersistedPeriod(lastQuota.fiveHour))) {
       this.cachedQuota = {
         fiveHour: lastQuota.fiveHour ? buildPeriod(lastQuota.fiveHour.utilization, new Date(lastQuota.fiveHour.resetsAt ?? NaN), 5) : undefined,
         sevenDay: buildPeriod(lastQuota.sevenDay.utilization, new Date(lastQuota.sevenDay.resetsAt ?? NaN), 7 * 24),
         models: (lastQuota.models ?? (lastQuota.sevenDayOpus
-          ? [{ key: 'seven_day_opus', label: 'Opus', period: lastQuota.sevenDayOpus }] : [])).map(model => ({
+          ? [{ key: 'seven_day_opus', label: 'Opus', period: lastQuota.sevenDayOpus }] : [])).filter(model => isValidPersistedPeriod(model.period)).map(model => ({
           ...model, period: buildPeriod(model.period.utilization, new Date(model.period.resetsAt ?? NaN), 7 * 24)
         })),
         lastUpdated: new Date(lastQuota.fetchedAt)
@@ -131,14 +137,16 @@ export class QuotaService {
       return this.pendingFetch
     }
 
+    // A clock set back makes the elapsed time negative: never throttle on it
+    const elapsed = Date.now() - this.lastFetchTime
     // Absolute minimum between API calls — prevents spam even on manual refresh
-    if (this.cachedQuota && Date.now() - this.lastFetchTime < MIN_FORCE_INTERVAL_MS) {
+    if (this.cachedQuota && elapsed >= 0 && elapsed < MIN_FORCE_INTERVAL_MS) {
       this._wasThrottled = true
       return this.getCachedQuota()!
     }
 
     // Enforce longer minimum for scheduled (non-forced) fetches
-    if (!force && this.cachedQuota && Date.now() - this.lastFetchTime < MIN_FETCH_INTERVAL_MS) {
+    if (!force && this.cachedQuota && elapsed >= 0 && elapsed < MIN_FETCH_INTERVAL_MS) {
       this._wasThrottled = true
       return this.getCachedQuota()!
     }
@@ -171,7 +179,7 @@ export class QuotaService {
         return this.getCachedQuota()!
       }
       // Cooldown restored at startup with nothing cached: surface it instead of an endless skeleton
-      this.lastError = { type: 'rate_limit', message: this.formatRateLimitMessage(), retryable: true }
+      this.lastError = classifyHttpError(429)
       return null
     }
     return this.doApiFetch()
@@ -185,12 +193,12 @@ export class QuotaService {
     const credentials = await keychainService.getCredentials()
     if (!credentials) {
       logger.error('No credentials available in Keychain')
-      this.lastError = { type: 'auth', message: t('error.noCredentials'), retryable: false }
+      this.lastError = classifyKeychainFailure(keychainService.lastFailure ?? 'missing')
       return null
     }
     if (keychainService.isTokenExpired(credentials)) {
       logger.warn('CLI token expired — waiting for Claude Code to refresh it')
-      this.lastError = { type: 'auth', message: t('error.cliTokenExpired'), retryable: true }
+      this.lastError = classifyHttpError(401)
       return null
     }
     // Claude Code switched account: drop the previous account's data
@@ -225,10 +233,11 @@ export class QuotaService {
       const response = await this.fetchOnce(credentials)
       if (!response) return this.getCachedQuota()
 
-      const rawData = await response.json()
+      // A body that is not JSON is the same failure as an unexpected shape, not a generic error
+      const rawData: unknown = await response.json().catch(() => undefined)
       if (!isValidUsageResponse(rawData)) {
-        logger.error('Invalid API response shape:', JSON.stringify(rawData).slice(0, 200))
-        this.lastError = { type: 'server', message: t('error.unexpectedResponse'), retryable: true }
+        logger.error('Invalid API response shape:', String(JSON.stringify(rawData)).slice(0, 200))
+        this.lastError = { type: 'unknown', key: 'error.unexpectedResponse', retryable: true }
         return this.getCachedQuota()
       }
       const data = rawData
@@ -328,7 +337,7 @@ export class QuotaService {
             return response
           }
         }
-        this.lastError = { type: 'auth', message: t('error.cliTokenExpired'), retryable: true }
+        this.lastError = classifyHttpError(401)
         return null
       }
 
@@ -340,8 +349,7 @@ export class QuotaService {
         settingsStore.set('rateLimitedUntil', this.rateLimitedUntil)
         this.applyRateLimitHeaders(response)
         logger.warn(`Rate limited (429), cooldown ${cooldownSec}s (retry-after=${serverSec}s)`)
-        this.lastError = { type: 'rate_limit', message: this.formatRateLimitMessage(), retryable: true }
-
+        this.lastError = classifyHttpError(429)
         return null
       }
 
@@ -387,25 +395,14 @@ export class QuotaService {
   }
 
   getLastError(): QuotaError | null {
-    // Return dynamic message for rate limit errors
-    if (this.lastError?.type === 'rate_limit' && this.rateLimitedUntil > 0) {
-      return { ...this.lastError, message: this.formatRateLimitMessage() }
-    }
-    return this.lastError
+    if (!this.lastError) return null
+    const { type, key, retryable } = this.lastError
+    const retryAt = Math.max(this.nextRetryAt, this.rateLimitedUntil)
+    return { type, message: t(key), retryable, ...(retryAt > Date.now() ? { retryAt } : {}) }
   }
 
   getRateLimitRemainingMs(): number {
     return Math.max(0, this.rateLimitedUntil - Date.now())
-  }
-
-  private formatRateLimitMessage(): string {
-    const remainingMs = this.getRateLimitRemainingMs()
-    if (remainingMs <= 0) return t('error.rateLimitRetrying')
-    const remainingSec = Math.ceil(remainingMs / 1000)
-    if (remainingSec >= 60) {
-      return t('error.rateLimitRetryMin', { min: Math.ceil(remainingSec / 60) })
-    }
-    return t('error.rateLimitRetrySec', { sec: remainingSec })
   }
 
   // Forget everything tied to the previous account
@@ -418,15 +415,19 @@ export class QuotaService {
     settingsStore.set('lastQuotaData', null)
     settingsStore.set('notifiedLevels', {})
     settingsStore.set('resetNotifications', {})
+    settingsStore.delete('extraUsageNotified')
   }
 
   getCachedQuota(): QuotaInfo | null {
     if (!this.cachedQuota) return null
     // Recalculate time-dependent fields on every read
     const { fiveHour, sevenDay, models } = this.cachedQuota
-    const staleAfterMs = 2 * settingsStore.get('refreshInterval') * 1000
+    const intervalMs = settingsStore.get('refreshInterval') * 1000
+    // Paused idle refreshes let the data age on purpose: it is not stale until that pause should have ended
+    const staleAfterMs = this.idlePaused ? IDLE_REFRESH_MAX_AGE_MS + intervalMs : 2 * intervalMs
     const result: QuotaInfo = {
       ...this.cachedQuota,
+      status: statusService.getStatus(),
       error: this.getLastError() ?? undefined,
       stale: Date.now() - this.cachedQuota.lastUpdated.getTime() > staleAfterMs,
       fiveHour: fiveHour ? buildPeriod(fiveHour.utilization, fiveHour.resetsAt, 5) : undefined,

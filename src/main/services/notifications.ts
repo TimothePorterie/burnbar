@@ -2,9 +2,9 @@ import { Notification } from 'electron'
 import { quotaService } from './quota-api'
 import { settingsStore } from './settings-store'
 import { logger } from './logger'
-import { t } from '../../shared/i18n'
+import { getLocale, t } from '../../shared/i18n'
 import { getQuotaLevel, WARNING_THRESHOLD, type QuotaLevel } from '../../shared/quota'
-import type { QuotaPeriod } from '../../shared/types'
+import type { ExtraUsageInfo, QuotaPeriod } from '../../shared/types'
 
 const LEVEL_PRIORITY: Record<QuotaLevel, number> = { normal: 0, warning: 1, critical: 2 }
 
@@ -41,6 +41,38 @@ export class NotificationService {
     delete levels.sevenDayOpus
     settingsStore.set('notifiedLevels', levels)
     settingsStore.set('resetNotifications', resets)
+    if (quota.extraUsage?.isEnabled) this.checkExtraUsage(quota.extraUsage)
+  }
+
+  private checkExtraUsage(extra: ExtraUsageInfo): void {
+    const previous = settingsStore.get('extraUsageNotified')
+    const levels = previous && extra.usedCredits >= previous.used ? [...previous.levels] : []
+    const body = t('notification.extraBody', { amount: this.formatMoney(extra.usedCredits, extra.currency) })
+    const reached: ('started' | '50' | '90')[] = []
+    if (extra.usedCredits > 0) reached.push('started')
+    if (extra.monthlyLimit > 0) {
+      if (extra.usedCredits >= extra.monthlyLimit * 0.5) reached.push('50')
+      if (extra.usedCredits >= extra.monthlyLimit * 0.9) reached.push('90')
+    }
+    const newLevels = reached.filter((level) => !levels.includes(level))
+    levels.push(...newLevels)
+    // Several thresholds crossed in one fetch: announce only the highest
+    const level = newLevels.at(-1)
+    if (previous && level) {
+      const title = level === 'started' ? t('notification.extraStarted') : t('notification.extraThreshold', {
+        pct: level, limit: this.formatMoney(extra.monthlyLimit, extra.currency)
+      })
+      this.send(title, body)
+    }
+    settingsStore.set('extraUsageNotified', { used: extra.usedCredits, levels })
+  }
+
+  private formatMoney(credits: number, currency: string): string {
+    try {
+      return new Intl.NumberFormat(getLocale(), { style: 'currency', currency }).format(credits / 100)
+    } catch {
+      return `${new Intl.NumberFormat(getLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(credits / 100)} ${currency}`
+    }
   }
 
   private checkPeriod(levels: Record<string, QuotaLevel>, key: string, label: string, period: QuotaPeriod): void {

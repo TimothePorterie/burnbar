@@ -1,5 +1,16 @@
 @import '../shared/tokens.css';
 
+.status-banner {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+}
+
+.status-banner[data-tone='crit'] { color: var(--crit); }
+.status-banner .link { color: inherit; flex-shrink: 0; }
+
 html,
 body {
   width: 320px;
@@ -231,6 +242,8 @@ body {
   color: var(--ink-3);
   font-size: var(--fs-xs);
 }
+
+#lastUpdated[data-warn] { color: var(--warn); }
 
 .link {
   padding: 2px var(--sp-1);

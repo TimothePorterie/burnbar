@@ -1,6 +1,7 @@
 // Settings renderer script
 import type { Locale } from '../../shared/i18n'
 import { t, setLocale, applyI18n } from '../../shared/i18n'
+import type { QuotaError } from '../../shared/types'
 
 // DOM elements
 const statusIndicator = document.getElementById('statusIndicator') as HTMLElement
@@ -11,6 +12,7 @@ const accountHint = document.getElementById('accountHint') as HTMLElement
 const language = document.getElementById('language') as HTMLSelectElement
 const enableNotifications = document.getElementById('enableNotifications') as HTMLInputElement
 const launchAtLogin = document.getElementById('launchAtLogin') as HTMLInputElement
+const showRemaining = document.getElementById('showRemaining') as HTMLInputElement
 const loginItemHint = document.getElementById('loginItemHint') as HTMLElement
 const openLoginItemsBtn = document.getElementById('openLoginItemsBtn') as HTMLButtonElement
 
@@ -57,18 +59,33 @@ function setRichText(el: HTMLElement, text: string): void {
 function showAccount(connected: boolean, detail: string): void {
   statusIndicator.classList.toggle('connected', connected)
   statusText.textContent = t(connected ? 'settings.connected' : 'settings.notConnected')
-  statusEmail.textContent = detail
+  setRichText(statusEmail, detail)
+  statusEmail.classList.toggle('wrap', !connected)
+  statusEmail.title = detail.replaceAll('`', '')
 }
 
-async function loadConnectionStatus(): Promise<void> {
+// The Keychain item exists but the session can't be used: same verdict as the popup
+const isSessionError = (error: QuotaError | null): boolean => error?.type === 'auth' || error?.type === 'keychain'
+
+async function loadConnectionStatus(recheck = false): Promise<void> {
   try {
-    if (await window.claudeBar.hasCredentials()) {
-      const userInfo = await window.claudeBar.getUserInfo()
-      const plan = userInfo?.subscriptionType
-      const planLabel = plan && plan.charAt(0).toUpperCase() + plan.slice(1)
-      showAccount(true, [userInfo?.email || userInfo?.name, planLabel].filter(Boolean).join(' · '))
-    } else {
+    if (!(await window.claudeBar.hasCredentials())) {
       showAccount(false, '')
+      return
+    }
+    let error = await window.claudeBar.getLastError()
+    // The user may have run `claude` since the last fetch: check again before reporting a problem
+    if (recheck && isSessionError(error)) {
+      await window.claudeBar.refreshQuota()
+      error = await window.claudeBar.getLastError()
+    }
+    const userInfo = await window.claudeBar.getUserInfo()
+    if (userInfo && !isSessionError(error)) {
+      const plan = userInfo.subscriptionType
+      const planLabel = plan && plan.charAt(0).toUpperCase() + plan.slice(1)
+      showAccount(true, [userInfo.email || userInfo.name, planLabel].filter(Boolean).join(' · '))
+    } else {
+      showAccount(false, error && isSessionError(error) ? error.message : t('error.credentialsInvalid'))
     }
   } catch (error) {
     console.error('Failed to load connection status:', error)
@@ -86,6 +103,11 @@ function applyLocale(lang: Locale): void {
 }
 
 // Event listeners
+showRemaining.addEventListener('change', async () => {
+  const saved = await window.claudeBar.setShowRemaining(showRemaining.checked)
+  if (!saved) showRemaining.checked = !showRemaining.checked
+})
+window.claudeBar.onShowRemainingChanged(enabled => { showRemaining.checked = enabled })
 language.addEventListener('change', async () => {
   const lang = language.value as Locale
   try {
@@ -98,7 +120,7 @@ language.addEventListener('change', async () => {
 
 refreshAccountBtn.addEventListener('click', async () => {
   refreshAccountBtn.disabled = true
-  await loadConnectionStatus()
+  await loadConnectionStatus(true)
   refreshAccountBtn.disabled = false
 })
 
@@ -140,12 +162,13 @@ openLoginItemsBtn.addEventListener('click', () => void window.claudeBar.openLogi
 // Re-check when the user comes back: login item approval, or a Claude Code login in the meantime
 window.addEventListener('focus', () => {
   void loadLoginItemStatus()
-  void loadConnectionStatus()
+  void loadConnectionStatus(true)
 })
 
 async function loadLoginItemStatus(): Promise<void> {
   try {
     const settings = await window.claudeBar.getSettings()
+    showRemaining.checked = settings.showRemaining
     loginItemHint.hidden = settings.launchAtLoginStatus !== 'requires-approval'
   } catch (error) {
     console.error('Failed to load login item status:', error)
@@ -255,6 +278,7 @@ async function init(): Promise<void> {
   selectRefreshInterval(settings.refreshInterval.toString())
   selectTheme(settings.theme)
   enableNotifications.checked = settings.enableNotifications
+  showRemaining.checked = settings.showRemaining
   launchAtLogin.checked = settings.launchAtLogin
   loginItemHint.hidden = settings.launchAtLoginStatus !== 'requires-approval'
   applyLocale(settings.language as Locale)

@@ -92,9 +92,13 @@ export class WindowManager {
   private revealPopup(): void {
     if (!this.popupWindow || this.popupWindow.isDestroyed()) return
     this.positionPopup()
-    // resetsIn/resetProgress are computed at send time — refresh them on every open
+    // resetsIn/resetProgress and the data age are computed at send time — refresh them on every open
     const quota = quotaService.getCachedQuota()
+    const error = quotaService.getLastError()
     if (quota) this.sendToPopup('quota-updated', quota)
+    else if (error) this.sendToPopup('quota-error', error)
+    // Outdated or failed data is refetched when looked at; the throttle keeps recent data as is
+    void schedulerService.refresh()
     // Activate the app so the popup becomes key and receives blur when clicking elsewhere
     app.focus({ steal: true })
     this.popupWindow.show()
@@ -288,7 +292,7 @@ export class WindowManager {
 
     this.settingsWindow = new BrowserWindow({
       width: 420,
-      height: 540,
+      height: 570,
       title: 'Claude Bar Settings',
       resizable: false,
       minimizable: true,

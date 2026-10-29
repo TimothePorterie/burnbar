@@ -11,7 +11,7 @@
     <main class="popup" id="popup" aria-busy="true">
       <header class="header" id="header">
         <div class="identity">
-          <span class="user-name" id="userName" data-i18n="popup.loading">Loading...</span>
+          <span class="user-name" id="userName"></span>
           <span class="plan" id="subscriptionBadge" hidden></span>
         </div>
         <button class="icon-btn" id="refreshBtn" data-i18n-title="popup.refreshShortcut">
@@ -21,6 +21,11 @@
           </svg>
         </button>
       </header>
+
+      <div class="status-banner" id="statusBanner" role="status" hidden>
+        <span id="statusMessage"></span>
+        <button class="link" id="statusDetails" data-i18n="status.details">Details</button>
+      </div>
 
       <div class="alert" id="errorSection" role="alert" hidden>
         <p class="selectable" id="errorMessage"></p>

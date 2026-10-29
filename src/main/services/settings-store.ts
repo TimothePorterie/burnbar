@@ -17,6 +17,7 @@ interface PersistedQuotaData {
 }
 
 interface SettingsStoreSchema {
+  showRemaining: boolean
   refreshInterval: number
   launchAtLogin: boolean
   enableNotifications: boolean
@@ -27,6 +28,7 @@ interface SettingsStoreSchema {
   displayMode: string
   resetNotifications: Record<string, { resetsAt: number; utilization: number }>
   notifiedLevels: Record<string, 'normal' | 'warning' | 'critical'>
+  extraUsageNotified?: { used: number; levels: ('started' | '50' | '90')[] }
   lastAccount: string | null
 }
 
@@ -35,6 +37,7 @@ export type { PersistedQuotaData }
 export const settingsStore = new Store<SettingsStoreSchema>({
   clearInvalidConfig: true,
   defaults: {
+    showRemaining: false,
     refreshInterval: 300,
     launchAtLogin: false,
     enableNotifications: true,

@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 export const WARNING_THRESHOLD = 70
 export const CRITICAL_THRESHOLD = 90
 
@@ -28,4 +30,24 @@ export function getForecast(
   const runsOutAt = projectedMs < periodMs
     ? new Date(resetsAt.getTime() - periodMs + projectedMs) : undefined
   return { pace, ...(runsOutAt ? { runsOutAt } : {}) }
+}
+
+// Scheduled refreshes pause during inactivity until the data reaches this age
+export const IDLE_REFRESH_MAX_AGE_MS = 30 * 60 * 1000
+
+export function formatDuration(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60000))
+  if (minutes >= 1440) return t('time.daysHours', { d: Math.floor(minutes / 1440), h: Math.floor(minutes / 60) % 24 })
+  if (minutes >= 60) return t('time.hoursMinutes', { h: Math.floor(minutes / 60), m: minutes % 60 })
+  return t('time.minutes', { m: minutes })
+}
+
+export function formatUpdated(lastUpdated: Date | string | number, now = Date.now()): string {
+  const age = now - new Date(lastUpdated).getTime()
+  return age < 60000 ? t('time.updatedJustNow') : t('time.updatedAgo', { age: formatDuration(age) })
+}
+
+export function formatRetry(retryAt: number | undefined, now = Date.now()): string {
+  if (!retryAt) return ''
+  return retryAt - now < 60000 ? t('error.retryingSoon') : t('error.nextTry', { time: formatDuration(retryAt - now) })
 }

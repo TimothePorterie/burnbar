@@ -1,7 +1,7 @@
 // Popup renderer script
 import type { Locale } from '../../shared/i18n'
 import { t, setLocale, getLocale, applyI18n } from '../../shared/i18n'
-import { WARNING_THRESHOLD, CRITICAL_THRESHOLD, getForecast } from '../../shared/quota'
+import { WARNING_THRESHOLD, CRITICAL_THRESHOLD, formatDuration, formatRetry, formatUpdated, getForecast } from '../../shared/quota'
 import type { QuotaError, QuotaErrorType, QuotaInfo, QuotaPeriod } from '../../shared/types'
 
 // DOM elements
@@ -14,6 +14,10 @@ const skeletonContainer = document.getElementById('skeletonContainer') as HTMLEl
 const userName = document.getElementById('userName') as HTMLElement
 const subscriptionBadge = document.getElementById('subscriptionBadge') as HTMLElement
 const refreshBtn = document.getElementById('refreshBtn') as HTMLButtonElement
+const statusBanner = document.getElementById('statusBanner') as HTMLElement
+const statusMessage = document.getElementById('statusMessage') as HTMLElement
+let statusUrl = 'https://status.claude.com/'
+let showRemaining = false
 
 const fiveHourRow = document.getElementById('fiveHour') as HTMLElement
 const sevenDayRow = document.getElementById('sevenDay') as HTMLElement
@@ -30,9 +34,7 @@ const errorGuidance = document.getElementById('errorGuidance') as HTMLElement
 const errorRetryBtn = document.getElementById('errorRetryBtn') as HTMLButtonElement
 
 const GUIDANCE: Partial<Record<QuotaErrorType, string>> = {
-  auth: 'error.authGuidance',
   network: 'error.networkGuidance',
-  rate_limit: 'error.rateLimitGuidance',
   server: 'error.serverGuidance'
 }
 
@@ -40,9 +42,10 @@ const PLANS: Record<string, string> = { pro: 'Pro', max: 'Max', team: 'Team', en
 
 // Guidance only when no data is shown: inline, it repeats the message
 function showError(error: QuotaError, withGuidance = false): void {
-  const guidance = withGuidance ? GUIDANCE[error.type] : undefined
+  const guidanceKey = withGuidance ? GUIDANCE[error.type] : undefined
+  const guidance = [guidanceKey ? t(guidanceKey) : '', formatRetry(error.retryAt)].filter(Boolean).join(' ')
   renderCode(errorMessage, error.message)
-  renderCode(errorGuidance, guidance ? t(guidance) : '')
+  renderCode(errorGuidance, guidance)
   errorGuidance.hidden = !guidance
   errorRetryBtn.hidden = false
   errorSection.dataset.tone = error.retryable ? 'warn' : 'crit'
@@ -79,7 +82,9 @@ function renderPeriod(row: HTMLElement, activePeriod: QuotaPeriod | undefined, p
   row.style.setProperty('--pace', `${period.resetProgress}%`)
   row.toggleAttribute('data-nopace', period.resetProgress <= 0)
   row.querySelector('.meter')!.setAttribute('aria-valuenow', String(value))
-  row.querySelector('.quota-value')!.textContent = `${value}%`
+  row.querySelector('.quota-value')!.textContent = showRemaining
+    ? activePeriod ? t('popup.remaining', { pct: Math.round(100 - period.utilization) }) : '—'
+    : `${value}%`
 
   const resetsAt = new Date(period.resetsAt)
   const hasReset = Number.isFinite(resetsAt.getTime())
@@ -104,12 +109,7 @@ function renderPeriod(row: HTMLElement, activePeriod: QuotaPeriod | undefined, p
   if (alert) {
     alert.hidden = !forecast?.runsOutAt
     if (forecast?.runsOutAt) {
-      const minutes = Math.floor((resetsAt.getTime() - forecast.runsOutAt.getTime()) / 60000)
-      const duration = minutes >= 1440
-        ? t('time.daysHours', { d: Math.floor(minutes / 1440), h: Math.floor(minutes / 60) % 24 })
-        : minutes >= 60
-          ? t('time.hoursMinutes', { h: Math.floor(minutes / 60), m: minutes % 60 })
-          : t('time.minutes', { m: minutes })
+      const duration = formatDuration(resetsAt.getTime() - forecast.runsOutAt.getTime())
       alert.textContent = t('popup.forecast', {
         time: forecast.runsOutAt.toLocaleString(getLocale(), {
           ...(periodHours === 168 ? { weekday: 'short' as const } : {}), hour: '2-digit', minute: '2-digit'
@@ -121,6 +121,11 @@ function renderPeriod(row: HTMLElement, activePeriod: QuotaPeriod | undefined, p
 }
 
 function updateQuotaDisplay(quota: QuotaInfo): void {
+  const status = quota.status
+  statusBanner.hidden = !status || status.indicator === 'none'
+  statusBanner.dataset.tone = status?.indicator === 'minor' ? 'warn' : 'crit'
+  statusMessage.textContent = status ? t('status.incident', { name: status.incident?.name ?? t('status.disruption') }) : ''
+  statusUrl = status?.incident?.url ?? 'https://status.claude.com/'
   renderPeriod(fiveHourRow, quota.fiveHour, 5)
   renderPeriod(sevenDayRow, quota.sevenDay)
 
@@ -143,11 +148,13 @@ function updateQuotaDisplay(quota: QuotaInfo): void {
   }
   extraUsageEl.hidden = !extra?.isEnabled
 
-  const time = new Date(quota.lastUpdated).toLocaleTimeString(getLocale(), { hour: '2-digit', minute: '2-digit' })
-  lastUpdated.textContent = t('popup.lastUpdated', { time })
+  // Relative age, flagged when the data is stale or the last refresh failed; exact time on hover
+  lastUpdated.textContent = formatUpdated(quota.lastUpdated)
+  lastUpdated.title = new Date(quota.lastUpdated).toLocaleString(getLocale())
+  lastUpdated.toggleAttribute('data-warn', !!quota.stale || !!quota.error)
 
-  // Show error banner for real errors, not for rate limits (cached data is still valid)
-  if (quota.error && quota.error.type !== 'rate_limit') {
+  // Cached data stays on screen: the alert says why it is not fresh and when the next try is
+  if (quota.error) {
     showError(quota.error)
   } else {
     hideError()
@@ -155,6 +162,7 @@ function updateQuotaDisplay(quota: QuotaInfo): void {
 }
 
 function setView(view: 'loading' | 'data' | 'error' | 'signedOut'): void {
+  if (view !== 'data') statusBanner.hidden = true
   popup.setAttribute('aria-busy', String(view === 'loading'))
   header.hidden = view === 'signedOut'
   skeletonContainer.hidden = view !== 'loading'
@@ -170,13 +178,20 @@ function showQuota(quota: QuotaInfo): void {
   updateQuotaDisplay(quota)
 }
 
+function showSignedOut(message = t('popup.notConnectedDesc')): void {
+  renderCode(document.getElementById('notConnectedDesc')!, message)
+  setView('signedOut')
+}
+
 function showFetchErrorState(error: QuotaError): void {
   if (error.type === 'auth') {
-    setView('signedOut')
+    showSignedOut(error.message)
     return
   }
   setView('error')
   showError(error, true)
+  // The Keychain is readable unless that is the error itself: name the account in the header
+  if (error.type !== 'keychain') void loadUserInfo()
 }
 
 async function loadUserInfo(): Promise<void> {
@@ -206,7 +221,7 @@ async function loadQuota(): Promise<void> {
     const hasCredentials = await window.claudeBar.hasCredentials()
 
     if (!hasCredentials) {
-      setView('signedOut')
+      showSignedOut()
       return
     }
 
@@ -236,17 +251,13 @@ async function refreshQuota(): Promise<void> {
   refreshBtn.disabled = true
 
   try {
-    // First, show refreshed cached data (with recalculated times)
-    const cached = await window.claudeBar.getQuota()
-    if (cached) showQuota(cached)
-
-    // Then attempt an API refresh (may return cache if min interval not elapsed)
+    // May return the cache when the minimum interval has not elapsed
     const result = await window.claudeBar.refreshQuota()
-    if (result.throttled) {
-      showToast(t('popup.throttled', { seconds: result.retryIn }))
-    } else if (result.quota) {
+    if (result.quota) {
       await loadUserInfo()
       showQuota(result.quota)
+      // A throttled refresh during an error is explained by the alert, not "up to date"
+      if (result.throttled && !result.quota.error) showToast(t('popup.throttled', { seconds: result.retryIn }))
     } else {
       const error = await window.claudeBar.getLastError()
       if (error) showFetchErrorState(error)
@@ -263,6 +274,7 @@ async function refreshQuota(): Promise<void> {
 }
 
 // Event listeners
+document.getElementById('statusDetails')!.addEventListener('click', () => void window.claudeBar.openStatusPage(statusUrl))
 refreshBtn.addEventListener('click', refreshQuota)
 errorRetryBtn.addEventListener('click', refreshQuota)
 
@@ -292,9 +304,9 @@ function reportContentHeight(): void {
 // Initialize locale then load
 async function init(): Promise<void> {
   const settings = await window.claudeBar.getSettings()
+  showRemaining = settings.showRemaining
   setLocale(settings.language as Locale)
   applyI18n()
-  renderCode(document.getElementById('notConnectedDesc')!, t('popup.notConnectedDesc'))
   await loadQuota()
 }
 

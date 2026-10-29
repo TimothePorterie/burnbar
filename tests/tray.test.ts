@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   quota: null as QuotaInfo | null,
   error: null as QuotaError | null,
   mode: 'standard',
+  showRemaining: false,
+  closePopup: vi.fn(),
+  send: vi.fn(),
   images: [] as { bitmap: Buffer; addRepresentation: ReturnType<typeof vi.fn>; setTemplateImage: ReturnType<typeof vi.fn> }[],
   tray: {
     setTitle: vi.fn(), setImage: vi.fn(), setToolTip: vi.fn(), on: vi.fn(), destroy: vi.fn(), popUpContextMenu: vi.fn()
@@ -17,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: { quit: vi.fn() },
+  BrowserWindow: { getAllWindows: () => [{ isDestroyed: () => false, webContents: { send: mocks.send } }] },
   Tray: class {
     constructor(...args: unknown[]) {
       mocks.createTray(...args)
@@ -36,13 +40,19 @@ vi.mock('../src/main/services/quota-api', () => ({
   quotaService: { getCachedQuota: () => mocks.quota, getLastError: () => mocks.error }
 }))
 vi.mock('../src/main/services/settings-store', () => ({
-  settingsStore: { get: () => mocks.mode, set: (_key: string, value: string) => { mocks.mode = value } }
+  settingsStore: {
+    get: (key: string) => key === 'showRemaining' ? mocks.showRemaining : mocks.mode,
+    set: (key: string, value: string | boolean) => {
+      if (key === 'showRemaining') mocks.showRemaining = value as boolean
+      else mocks.mode = value as string
+    }
+  }
 }))
 vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { onRefresh: vi.fn() } }))
 vi.mock('../src/main/services/updater', () => ({ updaterService: {} }))
 vi.mock('../src/main/services/logger', () => ({ logger: { info: vi.fn() } }))
 vi.mock('../src/main/services/notifications', () => ({ notificationService: {} }))
-vi.mock('../src/main/windows', () => ({ windowManager: {} }))
+vi.mock('../src/main/windows', () => ({ windowManager: { closePopup: mocks.closePopup } }))
 
 const { TrayManager } = await import('../src/main/tray')
 let manager: InstanceType<typeof TrayManager>
@@ -65,6 +75,7 @@ beforeEach(() => {
   mocks.quota = null
   mocks.error = null
   mocks.mode = 'standard'
+  mocks.showRemaining = false
   setLocale('en')
   manager = new TrayManager()
 })
@@ -75,6 +86,59 @@ afterEach(() => {
 })
 
 describe('tray display', () => {
+  it.each([
+    ['standard', '55% / 68%'],
+    ['detailed', '5h: 55% | 7d: 68% | Sonnet: 88%'],
+    ['compact', '55%'], ['time-remaining', '4h 30m'], ['minimal', '']
+  ])('shows remaining percentages in %s mode without changing the gauge', (mode, title) => {
+    mocks.mode = mode
+    mocks.showRemaining = true
+    mocks.quota = quota()
+    create()
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith(title, { fontType: 'monospacedDigit' })
+    expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, false))).toBe(true)
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Session: 55% left (resets in 4h 30m)')
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Weekly: 68% left')
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Sonnet: 88% left')
+  })
+
+  it('rounds the remaining percentage and preserves an absent session', () => {
+    mocks.showRemaining = true
+    mocks.quota = { ...quota(), fiveHour: undefined, sevenDay: period(32.5) }
+    create()
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('— / 68%', { fontType: 'monospacedDigit' })
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('No active session')
+  })
+
+  it('toggles remaining from the context menu and synchronizes settings immediately', () => {
+    mocks.quota = quota()
+    create()
+    mocks.tray.on.mock.calls.find(([name]) => name === 'right-click')![1]()
+    const item = mocks.menu.mock.lastCall![0].find((entry: { label?: string }) => entry.label === 'Show Remaining')
+    expect(item).toMatchObject({ type: 'checkbox', checked: false })
+    item.click({ checked: true })
+    expect(mocks.showRemaining).toBe(true)
+    expect(mocks.closePopup).toHaveBeenCalledOnce()
+    expect(mocks.send).toHaveBeenCalledWith('show-remaining-changed', true)
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('55% / 68%', { fontType: 'monospacedDigit' })
+  })
+
+  it('localizes the remaining tooltip in French', () => {
+    setLocale('fr')
+    mocks.showRemaining = true
+    mocks.quota = quota()
+    create()
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Session : 55 % restant')
+  })
+
+  it('adds only active Anthropic disruptions to the tooltip', () => {
+    mocks.quota = { ...quota(), status: { indicator: 'minor', incident: { name: 'API delays', url: 'https://status.claude.com/' } } }
+    create()
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Anthropic: API delays')
+    mocks.quota.status = { indicator: 'none' }
+    manager.refreshDisplay()
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).not.toContain('Anthropic:')
+  })
   it('uses two template representations and a fixed UUID v4', () => {
     create()
     expect(mocks.createTray).toHaveBeenCalledWith(mocks.images[0], '18f3a40d-d04b-4b87-972e-79bd0432eed3')
@@ -142,12 +206,33 @@ describe('tray display', () => {
     expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, false))).toBe(true)
   })
 
-  it('keeps fresh cached data undimmed during a rate limit', () => {
-    mocks.error = { type: 'rate_limit', message: 'Wait', retryable: true }
+  it('keeps fresh cached data undimmed during a rate limit but says why and when it retries', () => {
+    vi.setSystemTime(new Date('2026-10-29T10:25:00Z'))
+    mocks.error = { type: 'rate_limit', message: 'Anthropic rate limit reached.', retryable: true, retryAt: Date.now() + 3 * 60000 }
     mocks.quota = { ...quota(), error: mocks.error }
     create()
     expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, false))).toBe(true)
-    expect(mocks.tray.setToolTip.mock.lastCall![0]).not.toContain('Wait')
+    expect(mocks.tray.setToolTip.mock.lastCall![0].split('\n').slice(-3)).toEqual([
+      'Updated 25m ago', 'Anthropic rate limit reached.', 'Next try in 3m.'
+    ])
+  })
+
+  it('shows plain-text errors with the next try when nothing is cached', () => {
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    mocks.error = { type: 'auth', message: 'Run `claude` to log in.', retryable: true, retryAt: Date.now() + 10 * 60000 }
+    create()
+    expect(mocks.tray.setToolTip).toHaveBeenLastCalledWith('Claude Bar \u2014 Run claude to log in.\nNext try in 10m.')
+  })
+
+  it('ages the tooltip and dims newly stale data every minute without a fetch', () => {
+    vi.setSystemTime(new Date('2026-10-29T10:00:30Z'))
+    mocks.quota = quota()
+    create()
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Updated just now')
+    mocks.quota = { ...quota(), stale: true }
+    vi.advanceTimersByTime(60_000)
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Updated 1m ago')
+    expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, true))).toBe(true)
   })
 
   it('keeps critical quotas template and refreshes the time title with monospaced digits', () => {

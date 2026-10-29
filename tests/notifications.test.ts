@@ -11,10 +11,11 @@ vi.mock('../src/main/services/settings-store', () => ({
 }))
 vi.mock('../src/main/services/logger', () => ({ logger: { info: vi.fn() } }))
 const shown = vi.fn()
+const notificationOptions = vi.fn()
 vi.mock('electron', () => ({
   Notification: class {
     static isSupported = () => true
-    constructor(public opts: { title: string }) {}
+    constructor(public opts: { title: string; body: string }) { notificationOptions(opts) }
     show = () => shown(this.opts.title)
   }
 }))
@@ -25,6 +26,7 @@ vi.mock('../src/main/services/quota-api', () => ({ quotaService: { getCachedQuot
 const { NotificationService } = await import('../src/main/services/notifications')
 
 beforeEach(() => {
+  for (const key of Object.keys(store)) delete store[key]
   Object.assign(store, { enableNotifications: true, notifiedLevels: {}, resetNotifications: {} })
   setLocale('en')
   quota.fiveHour = period(5)
@@ -32,7 +34,9 @@ beforeEach(() => {
   quota.models = []
   delete quota.error
   delete quota.stale
+  delete quota.extraUsage
   shown.mockReset()
+  notificationOptions.mockReset()
   vi.useRealTimers()
 })
 
@@ -139,4 +143,96 @@ describe('NotificationService', () => {
     expect(shown).not.toHaveBeenCalled()
   })
 
+  describe('extra usage', () => {
+    beforeEach(() => {
+      quota.extraUsage = { isEnabled: true, usedCredits: 0, monthlyLimit: 5000, currency: 'USD' }
+    })
+
+    it('records an unknown initial state without notifying, including passed levels', () => {
+      quota.extraUsage!.usedCredits = 4600
+      new NotificationService().checkAndNotify()
+      new NotificationService().checkAndNotify()
+      expect(shown).not.toHaveBeenCalled()
+      expect(store.extraUsageNotified).toEqual({ used: 4600, levels: ['started', '50', '90'] })
+    })
+
+    it('notifies on first billed usage, with credits converted to currency', () => {
+      new NotificationService().checkAndNotify()
+      quota.extraUsage!.usedCredits = 120
+      new NotificationService().checkAndNotify()
+      new NotificationService().checkAndNotify()
+      expect(shown).toHaveBeenCalledExactlyOnceWith('Extra usage started')
+      expect(notificationOptions).toHaveBeenCalledWith({ title: 'Extra usage started', body: '$1.20 billed beyond your plan' })
+    })
+
+    it('notifies once at each limit crossing across restarts', () => {
+      store.extraUsageNotified = { used: 120, levels: ['started'] }
+      quota.extraUsage!.usedCredits = 2500
+      new NotificationService().checkAndNotify()
+      new NotificationService().checkAndNotify()
+      quota.extraUsage!.usedCredits = 4500
+      new NotificationService().checkAndNotify()
+      new NotificationService().checkAndNotify()
+      expect(shown.mock.calls).toEqual([
+        ['Extra usage at 50% of your $50.00 limit'], ['Extra usage at 90% of your $50.00 limit']
+      ])
+    })
+
+    it('announces only the highest level when usage jumps over multiple thresholds', () => {
+      new NotificationService().checkAndNotify()
+      quota.extraUsage!.usedCredits = 4600
+      new NotificationService().checkAndNotify()
+      expect(shown.mock.calls).toEqual([['Extra usage at 90% of your $50.00 limit']])
+      expect(store.extraUsageNotified).toEqual({ used: 4600, levels: ['started', '50', '90'] })
+    })
+
+    it.each([0, 120])('clears levels when billed usage falls to %s in a new cycle', (usedCredits) => {
+      store.extraUsageNotified = { used: 4600, levels: ['started', '50', '90'] }
+      quota.extraUsage!.usedCredits = usedCredits
+      new NotificationService().checkAndNotify()
+      expect(store.extraUsageNotified).toEqual({ used: usedCredits, levels: usedCredits ? ['started'] : [] })
+      shown.mockClear()
+      quota.extraUsage!.usedCredits = 4500
+      new NotificationService().checkAndNotify()
+      expect(shown.mock.calls).toEqual([['Extra usage at 90% of your $50.00 limit']])
+    })
+
+    it('only notifies the start when there is no monthly limit', () => {
+      new NotificationService().checkAndNotify()
+      quota.extraUsage!.monthlyLimit = 0
+      quota.extraUsage!.usedCredits = 10000
+      new NotificationService().checkAndNotify()
+      expect(shown).toHaveBeenCalledExactlyOnceWith('Extra usage started')
+    })
+
+    it('formats French messages and currency in the current locale', () => {
+      setLocale('fr')
+      new NotificationService().checkAndNotify()
+      quota.extraUsage!.usedCredits = 120
+      new NotificationService().checkAndNotify()
+      const amount = new Intl.NumberFormat('fr', { style: 'currency', currency: 'USD' }).format(1.2)
+      expect(notificationOptions).toHaveBeenCalledWith({ title: 'Usage hors forfait démarré', body: `${amount} facturés au-delà de votre forfait` })
+    })
+
+    it('falls back to a decimal amount and the currency code if it is invalid', () => {
+      new NotificationService().checkAndNotify()
+      quota.extraUsage!.currency = 'invalid'
+      quota.extraUsage!.usedCredits = 120
+      new NotificationService().checkAndNotify()
+      expect(notificationOptions).toHaveBeenCalledWith({ title: 'Extra usage started', body: '1.20 invalid billed beyond your plan' })
+    })
+
+    it.each(['disabled', 'error', 'stale', 'absent', 'alerts-off'])('ignores extra usage when %s', (state) => {
+      store.extraUsageNotified = { used: 0, levels: [] }
+      quota.extraUsage!.usedCredits = 4600
+      if (state === 'disabled') quota.extraUsage!.isEnabled = false
+      if (state === 'error') quota.error = { type: 'network', message: 'offline', retryable: true }
+      if (state === 'stale') quota.stale = true
+      if (state === 'absent') delete quota.extraUsage
+      if (state === 'alerts-off') store.enableNotifications = false
+      new NotificationService().checkAndNotify()
+      expect(shown).not.toHaveBeenCalled()
+      expect(store.extraUsageNotified).toEqual({ used: 0, levels: [] })
+    })
+  })
 })

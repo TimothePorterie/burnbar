@@ -1,9 +1,10 @@
-export type QuotaErrorType = 'network' | 'auth' | 'rate_limit' | 'server' | 'unknown'
+export type QuotaErrorType = 'network' | 'auth' | 'keychain' | 'rate_limit' | 'server' | 'unknown'
 
 export interface QuotaError {
   type: QuotaErrorType
   message: string
   retryable: boolean
+  retryAt?: number // next automatic attempt (epoch ms), when one is scheduled
 }
 
 export interface QuotaPeriod {
@@ -26,12 +27,18 @@ export interface ModelQuota {
   period: QuotaPeriod
 }
 
+export interface AnthropicStatus {
+  indicator: 'none' | 'minor' | 'major' | 'critical'
+  incident?: { name: string; url: string }
+}
+
 export interface QuotaInfo {
+  status?: AnthropicStatus
   fiveHour?: QuotaPeriod
   sevenDay: QuotaPeriod
   models: ModelQuota[]
   extraUsage?: ExtraUsageInfo
   lastUpdated: Date
   error?: QuotaError
-  stale?: boolean // data older than 2x the refresh interval
+  stale?: boolean // data older than 2x the refresh interval (longer while idle refreshes are paused)
 }
