@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-Planned as 2.0.0.
+## [2.0.0] - 2026-10-29
 
 ### Changed
 
@@ -52,5 +52,6 @@ Planned as 2.0.0.
 - Account switching, stale data, and error handling: cached data is flagged when outdated, errors stay visible over cached data, and late responses for a previous account are dropped.
 - Language changes apply to the menu bar right away.
 
-[Unreleased]: https://github.com/TimothePorterie/burnbar/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/TimothePorterie/burnbar/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/TimothePorterie/burnbar/compare/v1.8.0...v2.0.0
 [1.8.0]: https://github.com/TimothePorterie/burnbar/releases/tag/v1.8.0
