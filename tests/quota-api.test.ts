@@ -92,7 +92,7 @@ describe('QuotaService', () => {
   })
 
   it('parses, persists and restores every model while ignoring non-model keys', async () => {
-    const model = { utilization: 95, resets_at: new Date(Date.now() + 48 * HOUR).toISOString() }
+    const model = { utilization: 95, resets_at: new Date(Date.now() + 48.5 * HOUR).toISOString() }
     fetchMock.mockResolvedValueOnce(json(usage({
       seven_day_opus: { ...model, utilization: 20 }, seven_day_sonnet: model,
       seven_day_routines: model, seven_day_oauth_apps: model, seven_day_cowork: model,
