@@ -11,8 +11,10 @@
 </p>
 
 <!-- Screenshot is out of date. The current popup uses the shared light/dark tokens,
-     one meter per quota with an elapsed-time tick, and High/Critical text labels.
-     It does not show trend arrows, a statistics block, a separate reset bar, or pause.
+     one meter per quota with an elapsed-time tick, High/Critical labels, a pace
+     badge and a "runs out" line on the session and weekly cards, and compact
+     per-model rows when the API sends them. There is no in-app login. It does
+     not show trend arrows, a statistics block, a separate reset bar, or pause.
      Leave this file in place until a new capture is taken on a Mac. -->
 <p align="center">
   <img src="assets/screenshot.png" alt="Claude Bar Screenshot" width="400">
@@ -23,43 +25,49 @@
 ## Features
 
 ### Core
-- **In-App Login** — Log in directly from Claude Bar with OAuth (no CLI needed)
-- **Menu Bar Display** — Shows your current quota usage right in the menu bar
-- **Detailed Popup** — Session (5h) and weekly (7d) quotas, plus an Opus weekly quota and overage when your plan reports them
-- **Levels** — Under 70% is normal. From 70% the popup says **High**; from 90% it says **Critical**. The menu bar icon changes with the same thresholds. These levels are not configurable.
+- **Menu Bar Gauge** — A template icon drawn in the app: a thick bar for the 5-hour session, a thin bar for the weekly quota. The title uses monospaced digits. With nothing cached, the title is empty.
+- **Detailed Popup** — Session (5h) and weekly (7d) quotas. Per-model weekly quotas (Opus, Sonnet, Haiku, Fable) when the API sends them, plus overage when your plan reports it.
+- **Forecast** — On the session and weekly cards: a pace badge, the reset as `Reset in 2h 11m · 12:12` (a weekday on the weekly card), and `Runs out around … before reset` when the quota would hit 100% before the window ends.
+- **Levels** — Under 70% is normal. From 70% the popup says **High**; from 90% it says **Critical**. These levels are not configurable. Each model uses the same thresholds.
 - **Auto Refresh** — 5, 10, or 15 minutes
 - **Visual Feedback** — The refresh button spins while loading. If a refresh is throttled, a toast overlays the popup
 - **Tooltips** — Hover the menu bar icon for each quota, the time until it resets, and when the numbers were last updated
+- **Keyboard** — In the popup: Esc closes, ⌘R refreshes, ⌘, opens Settings, ⌘Q quits. The footer has a Quit button.
 - **Dark Mode** — Follows the macOS appearance
 - **Lightweight** — Runs quietly in the background with minimal resource usage
 - **Native Feel** — Uses macOS vibrancy effects for a native look
 - **Languages** — English and French
 
+Claude Bar does not log you in. [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance) (Authentication and credential use) forbid a third-party app from offering Claude.ai login or from collecting and storing Claude.ai tokens. Sign in with Claude Code. Claude Bar only reads that session.
+
 ### Display Modes
 Choose your preferred menu bar format (right-click → Display Mode):
 - **Standard**: `45% / 32%`
-- **Detailed**: `5h: 45% | 7d: 32%` (adds `| Opus: 10%` when that quota exists)
+- **Detailed**: `5h: 45% | 7d: 32%`, plus `| Opus: 10%` (and Sonnet, Haiku, or Fable) when that quota exists
 - **Compact**: `45%` (session usage)
 - **Time Remaining**: `4h 30m` (time until the session resets)
-- **Minimal**: Icon only, no text
+- **Icon only**: icon only, no text (the stored value is still `minimal`)
+
+With no active session window, the session slot in the title is `—`.
 
 ### Gauge
-Each quota is a single meter. The fill is how much of the quota you have used. A tick on the same meter shows how far the current period has elapsed.
+Each quota is a single meter. The fill is how much of the quota you have used. A tick on the same meter shows how far the current period has elapsed. A model row is the label, the meter, the percentage, and the level.
 
 ### Notifications
-- A system notification the first time a quota crosses 70%, and again at 90% (once per level, remembered across restarts)
-- Toggle on/off in Settings. The label states the fixed 70% and 90% levels.
+- A system notification the first time a quota crosses 70%, and again at 90% (once per level, remembered across restarts). This includes each model quota.
+- When a session or weekly window resets, one notification if that window had reached 70% or more (`Session quota reset` / `Weekly quota reset`). The title is the message, with no app name in front.
+- The same Alerts switch covers both. Nothing is sent while the last fetch failed or the cached numbers are stale.
 
 ### Auto-Updates
-- Automatic check on startup, then about every 6 hours
-- **Check for Updates** in Settings and in the menu bar menu (hidden while a download is in progress and when an update is ready to install)
+- Automatic check on startup, then about every 6 hours. A check is skipped while a download is in progress or an update is already downloaded.
+- **Check for Updates** in Settings and in the menu bar menu. In Settings the check button is hidden while a download is in progress, while an update is available to download, and when an update is ready to install.
 - Background download with a progress bar
 - **Install & Restart** from Settings
 
 ## Requirements
 
 - macOS 13.0 or later
-- A Claude Pro or Max subscription
+- Claude Code installed, and signed in with `claude`
 
 ## Installation
 
@@ -92,24 +100,14 @@ npm run dist
 
 ## Setup
 
-### Option 1: Log in from Claude Bar (Recommended)
-
-1. Launch Claude Bar
-2. Click the menu bar icon — the popup shows a **Log In** button
-3. Click **Log In** — your browser opens to authenticate with Claude
-4. Copy the authorization code and paste it back in Settings
-5. Done! Claude Bar starts monitoring your quotas
-
-### Option 2: Use Claude Code CLI credentials
-
-If you already use Claude Code CLI, Claude Bar can read your existing credentials:
-
-1. Make sure you're logged in via the CLI:
+1. Install [Claude Code](https://code.claude.com) and sign in:
    ```bash
    claude
    ```
-2. In Claude Bar, go to **Settings → Account → Source** and select **CLI**
-3. Claude Bar reads the CLI credentials from the macOS Keychain. It does not refresh or replace them. If the token expires, run `claude` again so Claude Code can rotate it.
+2. Launch Claude Bar
+3. If macOS asks for Keychain access to `Claude Code-credentials`, choose **Always Allow**
+
+Claude Bar reads that item and does not refresh or replace it. If the token expires, run `claude` again so Claude Code can rotate it.
 
 ## Usage
 
@@ -117,15 +115,19 @@ If you already use Claude Code CLI, Claude Bar can read your existing credential
 |--------|--------|
 | **Left-click** on menu bar icon | Opens or closes the quota popup |
 | **Right-click** on menu bar icon | Context menu (Refresh, Display Mode, Settings, Check for Updates, Quit) |
-| **Refresh** (popup button or menu) | Fetches quota data, at most once every 15 seconds |
+| **Refresh** (popup button, ⌘R, or menu) | Fetches quota data, at most once every 15 seconds |
+| **Esc** | Closes the popup |
+| **⌘,** | Opens Settings |
+| **⌘Q** or **Quit** in the popup footer | Quits Claude Bar |
+| **Launch Claude Bar again** | Opens Settings (the app is already running) |
 
 ### Menu Bar Display
 
 In the standard display mode the menu bar shows two percentages:
-- **First number**: Session quota (5-hour window)
+- **First number**: Session quota (5-hour window). `—` when there is no active session.
 - **Second number**: Weekly quota (7-day window)
 
-Other formats are listed under Display Modes.
+The icon is dimmed when the cached numbers are stale, or when the last fetch failed for a reason other than a rate limit that still has data to show. Other formats are listed under Display Modes.
 
 ### Quota Levels
 
@@ -139,24 +141,24 @@ Thresholds are fixed.
 
 ### Settings
 
-Access settings via right-click → Settings. The window is grouped into Account, General, and Updates:
+Access settings via right-click → Settings, or ⌘, from the popup. The window is grouped into Account, General, and Updates:
 
-- **Source**: Claude Bar (OAuth) or CLI (Keychain). Only the selected source is used.
+- **Account**: connected or not, from the Keychain. Email or name, and the plan when present. A hint to run `claude`. **Refresh** re-reads that status.
 - **Language**: English or French
 - **Refresh every**: 5, 10, or 15 minutes
-- **Alerts**: System notifications at 70% and 90%
-- **Open at login**
+- **Alerts**: System notifications at 70% and 90%, and the reset notification
+- **Open at login**. If macOS still needs approval, a hint and a button open System Settings → General → Login Items.
 - **Updates**: Check, download, and install with one click
 
 ## How It Works
 
-Claude Bar authenticates via OAuth with the Anthropic API. You can log in from the app (tokens encrypted via macOS `safeStorage`) or reuse Claude Code CLI credentials from the macOS Keychain. It periodically calls:
+Claude Bar reads Claude Code's session from the macOS Keychain and periodically calls:
 
 ```
 GET https://api.anthropic.com/api/oauth/usage
 ```
 
-No API keys or manual configuration required.
+It never calls a token endpoint. Claude Code owns refresh. No API keys or manual configuration required.
 
 ### Sleep and Wake
 
@@ -167,18 +169,15 @@ No API keys or manual configuration required.
 
 | Source | Storage | Token refresh |
 |--------|---------|---------------|
-| **Claude Bar (OAuth)** | Encrypted via `safeStorage` | Automatic |
-| **CLI (Keychain)** | macOS Keychain, read-only | By Claude Code (`claude`). Claude Bar never writes this item. |
+| **Claude Code (Keychain)** | macOS Keychain item `Claude Code-credentials`, read-only | By Claude Code (`claude`). Claude Bar never writes this item. |
 
-Switching source, logging in, or logging out clears the cached quota and fetches again.
+A Claude Code account change (a different account id, or the email when there is no id) drops the cached quota during the fetch that sees the new account, then stores that account's numbers.
 
 ### Security
 
 - **Context Isolation**: The renderer cannot access Node.js
 - **Preload Bridge**: All IPC via a secure contextBridge
-- **Encrypted Token Storage**: In-app tokens encrypted via macOS `safeStorage`
-- **Keychain**: CLI credentials are read, never written
-- **PKCE OAuth Flow**: Authorization code flow with a code challenge
+- **Keychain**: Claude Code credentials are read, never written. Claude Bar does not collect or store Claude.ai tokens.
 - **Signed Updates**: Release builds are signed and notarized
 
 ## Development
@@ -206,14 +205,15 @@ npm run release
 claude-bar/
 ├── src/
 │   ├── main/           # Electron main process
-│   │   ├── services/   # Auth, Keychain, API, Scheduler, Notifications, Updater
-│   │   ├── tray.ts     # Menu bar icon
+│   │   ├── services/   # Keychain, API, scheduler, notifications, updater
+│   │   ├── tray.ts     # Menu bar title, tooltip, context menu
+│   │   ├── tray-icon.ts # Template gauge bitmap
 │   │   └── windows.ts  # Popup and Settings windows
 │   ├── preload/        # Secure IPC bridge
 │   └── renderer/       # Popup, Settings, shared tokens
 ├── tests/              # Vitest unit tests
-├── assets/             # Icons
-└── scripts/            # Icon generation scripts
+├── assets/             # App icon and screenshot
+└── scripts/            # App icon and screenshot generators, mac-dev.sh (run on the Mac)
 ```
 
 ### Running Tests
@@ -226,9 +226,9 @@ npm run test:coverage  # Run tests with coverage report
 
 ## Troubleshooting
 
-### "Not Connected" message
+### "Claude Code is not connected"
 
-Click **Log In** in the popup or Settings. Or authenticate with Claude Code (`claude`) and select **CLI** as the source in Settings.
+Run `claude` in a terminal and sign in, then click **Retry** in the popup. If macOS asks for Keychain access, choose **Always Allow**.
 
 ### Quota not updating
 
@@ -245,7 +245,7 @@ codesign --force --deep --sign - /Applications/Claude\ Bar.app
 
 ### App not starting
 
-If the app fails to start, try removing it from Login Items and re-adding it through Settings.
+If the app fails to start, try removing it from Login Items and re-adding it through Settings. If macOS is waiting for approval, Settings shows a hint and a button that opens System Settings → General → Login Items.
 
 ## License
 
