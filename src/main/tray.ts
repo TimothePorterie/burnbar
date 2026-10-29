@@ -1,20 +1,43 @@
 import { Tray, Menu, nativeImage, app, BrowserWindow } from 'electron'
 import { statusService } from './services/status'
 import { quotaService } from './services/quota-api'
-import { schedulerService } from './services/scheduler'
+import { codexService } from './services/codex'
+import { consumptionService } from './services/consumption'
+import { codexScheduler, schedulerService } from './services/scheduler'
+import { getEnabledProviders, getProvidersSnapshot, getTrayProvider, isProviderEnabled } from './services/providers'
 import { updaterService } from './services/updater'
 import { logger } from './services/logger'
 import { windowManager } from './windows'
 import { settingsStore } from './services/settings-store'
 import { notificationService } from './services/notifications'
 import { t } from '../shared/i18n'
-import { formatRetry, formatUpdated } from '../shared/quota'
+import { formatRetry, formatUpdated, formatUsage } from '../shared/quota'
+import type { CodexQuota, ModelQuota, QuotaError, QuotaInfo, QuotaPeriod } from '../shared/types'
 import { renderGaugeBitmap } from './tray-icon'
 
 type DisplayMode = 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
 
+interface TraySource {
+  name: string
+  fiveHour?: QuotaPeriod
+  sevenDay?: QuotaPeriod
+  models: ModelQuota[]
+}
+
 // Tooltips are plain text: drop the backticks that mark `claude` as code in the popup
 const plainText = (message: string): string => message.replaceAll('`', '')
+const load = (source: TraySource): number => Math.max(source.fiveHour?.utilization ?? 0, source.sevenDay?.utilization ?? 0)
+const barMax = (values: (number | undefined)[]): number | null =>
+  values.some(value => value !== undefined) ? Math.max(...values.map(value => value ?? 0)) : null
+
+// Popup and Settings follow provider changes
+export function broadcastProviders(): void {
+  void getProvidersSnapshot().then((snapshot) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) window.webContents.send('providers-updated', snapshot)
+    }
+  })
+}
 
 export class TrayManager {
   private tray: Tray | null = null
@@ -22,11 +45,31 @@ export class TrayManager {
   private onShowSettings: (() => void) | null = null
   private minuteTimer: NodeJS.Timeout | null = null
   private lastNotifiedFetch = Date.now() // restored data predates this: notify only after a real fetch
+  private lastNotifiedCodex = 0
+
+  private claudeQuota(): QuotaInfo | null {
+    return isProviderEnabled('claude') ? quotaService.getCachedQuota() : null
+  }
+
+  private codexQuota(): CodexQuota | null {
+    return isProviderEnabled('codex') ? codexService.getCachedQuota() : null
+  }
+
+  // What the menu bar shows: one provider, or both for Highest
+  private sources(): TraySource[] {
+    const provider = getTrayProvider()
+    const claude = provider === 'codex' ? null : this.claudeQuota()
+    const codex = provider === 'claude' ? null : this.codexQuota()
+    return [
+      ...(claude ? [{ ...claude, name: 'Claude' }] : []),
+      ...(codex ? [{ ...codex, name: 'Codex', models: [] }] : [])
+    ]
+  }
 
   private createIcon(): Electron.NativeImage {
-    const quota = quotaService.getCachedQuota()
-    const fiveHour = quota?.fiveHour?.utilization ?? null
-    const sevenDay = quota?.sevenDay.utilization ?? null
+    const sources = this.sources()
+    const fiveHour = barMax(sources.map(source => source.fiveHour?.utilization))
+    const sevenDay = barMax(sources.map(source => source.sevenDay?.utilization))
     const dimmed = this.needsAttention()
     const image = nativeImage.createFromBitmap(renderGaugeBitmap(fiveHour, sevenDay, 1, dimmed), {
       width: 18, height: 18, scaleFactor: 1
@@ -86,6 +129,21 @@ export class TrayManager {
       }
     })
 
+    codexScheduler.onRefresh(() => {
+      this.refreshDisplay()
+      broadcastProviders()
+      const fetchedAt = codexService.getCachedQuota()?.lastUpdated.getTime() ?? 0
+      if (fetchedAt > this.lastNotifiedCodex) {
+        this.lastNotifiedCodex = fetchedAt
+        notificationService.checkCodex()
+      }
+    })
+
+    consumptionService.onRefresh(() => {
+      this.updateTooltip()
+      broadcastProviders()
+    })
+
     logger.info('Tray created')
   }
 
@@ -118,31 +176,47 @@ export class TrayManager {
     return Math.round(settingsStore.get('showRemaining') ? 100 - utilization : utilization)
   }
 
+  private percent(period: QuotaPeriod | undefined): string {
+    return period ? `${this.displayPercentage(period.utilization)}%` : '—'
+  }
+
   // Errors other than rate limits (cached data is still valid then), or data too old to trust
-  private needsAttention(): boolean {
-    const lastError = quotaService.getLastError()
-    const quota = quotaService.getCachedQuota()
+  private attention(lastError: QuotaError | null, quota: { stale?: boolean } | null): boolean {
     return (!!lastError && (lastError.type !== 'rate_limit' || !quota)) || !!quota?.stale
+  }
+
+  // Highest dims only when both providers do: one failing provider leaves the other's data valid
+  private needsAttention(): boolean {
+    const provider = getTrayProvider()
+    const claude = (): boolean => this.attention(quotaService.getLastError(), this.claudeQuota())
+    const codex = (): boolean => this.attention(codexService.getLastError(), this.codexQuota())
+    return provider === 'max' ? claude() && codex() : provider === 'claude' ? claude() : codex()
   }
 
   updateTitle(): void {
     if (!this.tray) return
 
-    const quota = quotaService.getCachedQuota()
-    if (!quota) {
+    const sources = this.sources()
+    // Highest: the title follows the most loaded provider
+    const source = sources.reduce<TraySource | null>((top, item) => !top || load(item) > load(top) ? item : top, null)
+    if (!source) {
       this.tray.setTitle('', { fontType: 'monospacedDigit' })
       return
     }
 
-    const fiveHour = quota.fiveHour ? `${this.displayPercentage(quota.fiveHour.utilization)}%` : '—'
-    const sevenDay = this.displayPercentage(quota.sevenDay.utilization)
+    const fiveHour = this.percent(source.fiveHour)
     let title: string
 
     switch (this.getDisplayMode()) {
-      case 'detailed':
-        title = [t('tray.detailedFmt', { five: fiveHour, seven: sevenDay }),
-          ...quota.models.map(model => `${model.label}: ${this.displayPercentage(model.period.utilization)}%`)].join(' | ')
+      case 'detailed': {
+        const both = [this.claudeQuota(), this.codexQuota()]
+        title = both.every(Boolean)
+          ? [{ ...both[0]!, name: 'Claude' }, { ...both[1]!, name: 'Codex' }].map(item =>
+            `${item.name} ${this.percent(item.fiveHour)} / ${this.percent(item.sevenDay)}`).join(' · ')
+          : [t('tray.detailedFmt', { five: fiveHour, seven: this.percent(source.sevenDay) }),
+            ...source.models.map(model => `${model.label}: ${this.displayPercentage(model.period.utilization)}%`)].join(' | ')
         break
+      }
       case 'compact':
         title = fiveHour
         break
@@ -150,10 +224,10 @@ export class TrayManager {
         title = ''
         break
       case 'time-remaining':
-        title = quota.fiveHour?.resetsIn ?? '—'
+        title = source.fiveHour?.resetsIn ?? '—'
         break
       default: // standard
-        title = `${fiveHour} / ${sevenDay}%`
+        title = `${fiveHour} / ${this.percent(source.sevenDay)}`
     }
 
     this.tray.setTitle(title, { fontType: 'monospacedDigit' })
@@ -165,43 +239,74 @@ export class TrayManager {
     this.tray.setImage(this.createIcon())
   }
 
+  private periodLines(fiveHour: QuotaPeriod | undefined, sevenDay: QuotaPeriod | undefined): string[] {
+    const suffix = settingsStore.get('showRemaining') ? 'Remaining' : ''
+    return [
+      fiveHour
+        ? t(`tray.session${suffix}`, { pct: this.displayPercentage(fiveHour.utilization), resets: fiveHour.resetsIn })
+        : t('popup.noSession'),
+      ...(sevenDay ? [t(`tray.weekly${suffix}`, { pct: this.displayPercentage(sevenDay.utilization), resets: sevenDay.resetsIn })] : [])
+    ]
+  }
+
+  private ageLines(quota: { lastUpdated: Date; error?: QuotaError; stale?: boolean }): string[] {
+    return [
+      formatUpdated(quota.lastUpdated),
+      ...(quota.error ? [plainText(quota.error.message), formatRetry(quota.error.retryAt)] : []),
+      ...(quota.stale ? [t('tray.stale')] : [])
+    ].filter(Boolean)
+  }
+
+  private errorLines(error: QuotaError | null): string[] {
+    return error ? [plainText(error.message), formatRetry(error.retryAt)].filter(Boolean) : ['—']
+  }
+
+  private claudeLines(quota: QuotaInfo): string[] {
+    const suffix = settingsStore.get('showRemaining') ? 'Remaining' : ''
+    return [
+      ...this.periodLines(quota.fiveHour, quota.sevenDay),
+      ...quota.models.map(model => t(`tray.model${suffix}`, {
+        label: model.label, pct: this.displayPercentage(model.period.utilization), resets: model.period.resetsIn
+      })),
+      ...(quota.status && quota.status.indicator !== 'none'
+        ? [t('tray.anthropicStatus', { name: quota.status.incident?.name ?? t('status.disruption') })] : []),
+      ...this.ageLines(quota)
+    ]
+  }
+
   updateTooltip(): void {
     if (!this.tray) return
 
-    const quota = quotaService.getCachedQuota()
-    if (!quota) {
+    const enabled = getEnabledProviders()
+    const quota = this.claudeQuota()
+    if (!enabled.codex && !enabled.grok && !enabled.opencode) {
       const lastError = quotaService.getLastError()
-      if (lastError) {
-        this.tray.setToolTip([`Claude Bar \u2014 ${plainText(lastError.message)}`, formatRetry(lastError.retryAt)].filter(Boolean).join('\n'))
-      } else {
-        this.tray.setToolTip(t('tray.clickToView'))
-      }
+      if (quota) this.tray.setToolTip(this.claudeLines(quota).join('\n'))
+      else if (lastError) this.tray.setToolTip([t('tray.error', { message: plainText(lastError.message) }), formatRetry(lastError.retryAt)].filter(Boolean).join('\n'))
+      else this.tray.setToolTip(t('tray.clickToView'))
       return
     }
 
-    const suffix = settingsStore.get('showRemaining') ? 'Remaining' : ''
-    const sevenDay = this.displayPercentage(quota.sevenDay.utilization)
-    const lines = [
-      quota.fiveHour
-        ? t(`tray.session${suffix}`, { pct: this.displayPercentage(quota.fiveHour.utilization), resets: quota.fiveHour.resetsIn })
-        : t('popup.noSession'),
-      t(`tray.weekly${suffix}`, { pct: sevenDay, resets: quota.sevenDay.resetsIn })
-    ]
-    for (const model of quota.models) {
-      lines.push(t(`tray.model${suffix}`, { label: model.label, pct: this.displayPercentage(model.period.utilization), resets: model.period.resetsIn }))
+    // One block per enabled provider
+    const blocks: string[][] = []
+    if (enabled.claude) blocks.push(['Claude Code', ...(quota ? this.claudeLines(quota) : this.errorLines(quotaService.getLastError()))])
+    if (enabled.codex) {
+      const codex = codexService.getCachedQuota()
+      blocks.push(['Codex', ...(codex ? [
+        ...this.periodLines(codex.fiveHour, codex.sevenDay),
+        ...(codex.limitReached ? [t('codex.limitReached')] : []),
+        ...(codex.resetsAvailable > 0 ? [t(codex.resetsAvailable === 1 ? 'codex.resetAvailable' : 'codex.resetsAvailable', { count: codex.resetsAvailable })] : []),
+        ...this.ageLines(codex)
+      ] : this.errorLines(codexService.getLastError()))])
     }
-    if (quota.status && quota.status.indicator !== 'none') {
-      lines.push(t('tray.anthropicStatus', { name: quota.status.incident?.name ?? t('status.disruption') }))
-    }
-    lines.push(formatUpdated(quota.lastUpdated))
-    if (quota.error) {
-      lines.push(plainText(quota.error.message))
-      if (quota.error.retryAt) lines.push(formatRetry(quota.error.retryAt))
-    }
-    if (quota.stale) {
-      lines.push(t('tray.stale'))
-    }
-    this.tray.setToolTip(lines.join('\n'))
+    const usage = (['grok', 'opencode'] as const).filter(id => enabled[id]).flatMap((id) => {
+      const { data, error } = consumptionService.getView(id)
+      const name = id === 'grok' ? 'Grok' : 'OpenCode'
+      return [`${name}: ${data ? formatUsage(data) : plainText(error?.message ?? '\u2014')}`,
+        ...(data && error ? [plainText(error.message)] : [])]
+    })
+    if (usage.length) blocks.push(usage)
+    this.tray.setToolTip(blocks.map(lines => lines.join('\n')).join('\n\n'))
   }
 
   private showContextMenu(): void {

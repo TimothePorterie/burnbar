@@ -1,14 +1,17 @@
 import { ipcMain, app, BrowserWindow, shell, nativeTheme } from 'electron'
 import { keychainService } from './services/keychain'
 import { quotaService, QuotaInfo } from './services/quota-api'
-import { schedulerService } from './services/scheduler'
+import { codexScheduler, schedulerService } from './services/scheduler'
+import { consumptionService } from './services/consumption'
+import { getProvidersSnapshot, PROVIDER_IDS, setProviderEnabled } from './services/providers'
 import { updaterService } from './services/updater'
 import { logger } from './services/logger'
 import { windowManager } from './windows'
-import { trayManager } from './tray'
+import { broadcastProviders, trayManager } from './tray'
 import { isStatusPageUrl } from './services/status'
 import { settingsStore as store } from './services/settings-store'
 import type { Locale } from '../shared/i18n'
+import type { ProviderId, TrayProvider } from '../shared/types'
 import { setLocale } from '../shared/i18n'
 
 // Input validation helpers
@@ -27,6 +30,16 @@ const VALID_THEMES = ['system', 'light', 'dark'] as const
 
 function isValidTheme(value: unknown): value is 'system' | 'light' | 'dark' {
   return typeof value === 'string' && VALID_THEMES.includes(value as 'system' | 'light' | 'dark')
+}
+
+const VALID_TRAY_PROVIDERS = ['claude', 'codex', 'max'] as const
+
+function isValidTrayProvider(value: unknown): value is TrayProvider {
+  return typeof value === 'string' && VALID_TRAY_PROVIDERS.includes(value as TrayProvider)
+}
+
+function isValidProvider(value: unknown): value is ProviderId {
+  return typeof value === 'string' && PROVIDER_IDS.includes(value as ProviderId)
 }
 
 function isValidLanguage(value: unknown): value is Locale {
@@ -57,10 +70,11 @@ export function setupIpcHandlers(): void {
     }
   })
 
-  // Force refresh quota (bypass min-interval)
+  // Force refresh quota (bypass min-interval); consumption keeps its 15 min floor
   ipcMain.handle('refresh-quota', async () => {
     try {
-      await schedulerService.refresh(true)
+      void consumptionService.refresh()
+      await Promise.all([schedulerService.refresh(true), codexScheduler.refresh(true)])
       return {
         quota: quotaService.getCachedQuota(),
         throttled: quotaService.wasThrottled(),
@@ -112,7 +126,8 @@ export function setupIpcHandlers(): void {
         enableNotifications: store.get('enableNotifications'),
         language: store.get('language'),
         theme: store.get('theme'),
-        showRemaining: store.get('showRemaining')
+        showRemaining: store.get('showRemaining'),
+        trayProvider: store.get('trayProvider')
       }
     } catch (error) {
       logger.error('IPC get-settings error:', error)
@@ -122,9 +137,48 @@ export function setupIpcHandlers(): void {
         enableNotifications: true,
         language: 'en',
         theme: 'system',
-        showRemaining: false
+        showRemaining: false,
+        trayProvider: 'claude'
       }
     }
+  })
+
+  ipcMain.handle('get-providers', async () => {
+    try {
+      return await getProvidersSnapshot()
+    } catch (error) {
+      logger.error('IPC get-providers error:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('set-provider-enabled', (_event, id: unknown, enabled: unknown) => {
+    if (!isValidProvider(id) || !isValidBoolean(enabled)) {
+      logger.warn(`Invalid provider toggle rejected: ${id}=${enabled}`)
+      return false
+    }
+    setProviderEnabled(id, enabled)
+    // Rebuilt with the new sections on next open
+    windowManager.closePopup()
+    const scheduler = id === 'claude' ? schedulerService : id === 'codex' ? codexScheduler : null
+    scheduler?.stop()
+    if (scheduler && enabled) scheduler.start(true)
+    else if (enabled) void consumptionService.refresh(true)
+    trayManager.refreshDisplay()
+    broadcastProviders()
+    logger.info(`Provider ${id}: ${enabled ? 'on' : 'off'}`)
+    return true
+  })
+
+  ipcMain.handle('set-tray-provider', (_event, provider: unknown) => {
+    if (!isValidTrayProvider(provider)) {
+      logger.warn(`Invalid tray provider rejected: ${provider}`)
+      return false
+    }
+    store.set('trayProvider', provider)
+    trayManager.refreshDisplay()
+    logger.info(`Menu bar shows '${provider}'`)
+    return true
   })
 
   ipcMain.handle('open-status-page', async (_event, url: unknown) => {
@@ -153,6 +207,7 @@ export function setupIpcHandlers(): void {
     try {
       store.set('refreshInterval', seconds)
       schedulerService.setRefreshInterval(seconds)
+      codexScheduler.setRefreshInterval(seconds)
       logger.info(`Refresh interval set to ${seconds}s`)
       return true
     } catch (error) {
@@ -314,6 +369,7 @@ export function loadSettings(): void {
     const refreshInterval = store.get('refreshInterval')
     if (isValidRefreshInterval(refreshInterval)) {
       schedulerService.setRefreshInterval(refreshInterval)
+      codexScheduler.setRefreshInterval(refreshInterval)
     } else if (refreshInterval != null) {
       // Migrate obsolete value (e.g. 120s) to default
       store.set('refreshInterval', 300)

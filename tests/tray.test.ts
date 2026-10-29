@@ -1,11 +1,16 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
-import type { QuotaError, QuotaInfo, QuotaPeriod } from '../src/shared/types'
+import type { CodexQuota, ConsumptionInfo, ProviderId, QuotaError, QuotaInfo, QuotaPeriod, TrayProvider } from '../src/shared/types'
 import { renderGaugeBitmap } from '../src/main/tray-icon'
 import { setLocale } from '../src/shared/i18n'
 
 const mocks = vi.hoisted(() => ({
   quota: null as QuotaInfo | null,
   error: null as QuotaError | null,
+  codex: null as CodexQuota | null,
+  codexError: null as QuotaError | null,
+  usage: {} as Record<string, { data: ConsumptionInfo | null; error: QuotaError | null }>,
+  enabled: { claude: true, codex: false, grok: false, opencode: false } as Record<ProviderId, boolean>,
+  trayProvider: 'claude' as TrayProvider,
   mode: 'standard',
   showRemaining: false,
   closePopup: vi.fn(),
@@ -48,7 +53,19 @@ vi.mock('../src/main/services/settings-store', () => ({
     }
   }
 }))
-vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { onRefresh: vi.fn() } }))
+vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { onRefresh: vi.fn() }, codexScheduler: { onRefresh: vi.fn() } }))
+vi.mock('../src/main/services/codex', () => ({
+  codexService: { getCachedQuota: () => mocks.codex, getLastError: () => mocks.codexError }
+}))
+vi.mock('../src/main/services/consumption', () => ({
+  consumptionService: { onRefresh: vi.fn(), getView: (id: string) => mocks.usage[id] ?? { data: null, error: null } }
+}))
+vi.mock('../src/main/services/providers', () => ({
+  getEnabledProviders: () => mocks.enabled,
+  isProviderEnabled: (id: ProviderId) => mocks.enabled[id],
+  getTrayProvider: () => mocks.trayProvider,
+  getProvidersSnapshot: vi.fn(async () => ({}))
+}))
 vi.mock('../src/main/services/updater', () => ({ updaterService: {} }))
 vi.mock('../src/main/services/logger', () => ({ logger: { info: vi.fn() } }))
 vi.mock('../src/main/services/notifications', () => ({ notificationService: {} }))
@@ -76,6 +93,11 @@ beforeEach(() => {
   mocks.error = null
   mocks.mode = 'standard'
   mocks.showRemaining = false
+  mocks.codex = null
+  mocks.codexError = null
+  mocks.usage = {}
+  mocks.enabled = { claude: true, codex: false, grok: false, opencode: false }
+  mocks.trayProvider = 'claude'
   setLocale('en')
   manager = new TrayManager()
 })
@@ -221,7 +243,7 @@ describe('tray display', () => {
     vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
     mocks.error = { type: 'auth', message: 'Run `claude` to log in.', retryable: true, retryAt: Date.now() + 10 * 60000 }
     create()
-    expect(mocks.tray.setToolTip).toHaveBeenLastCalledWith('Claude Bar \u2014 Run claude to log in.\nNext try in 10m.')
+    expect(mocks.tray.setToolTip).toHaveBeenLastCalledWith('BurnBar \u2014 Run claude to log in.\nNext try in 10m.')
   })
 
   it('ages the tooltip and dims newly stale data every minute without a fetch', () => {
@@ -255,5 +277,81 @@ describe('tray display', () => {
     expect(modes.at(-1)).toMatchObject({ label, checked: true })
     modes.at(-1).click()
     expect(mocks.mode).toBe('minimal')
+  })
+})
+
+describe('several providers', () => {
+  const codex = (five = 22, seven = 12): CodexQuota => ({
+    fiveHour: period(five), sevenDay: period(seven), plan: 'Team', resetsAvailable: 2, limitReached: false,
+    lastUpdated: new Date('2026-10-29T10:00:00Z')
+  })
+  const usage = (): ConsumptionInfo => ({
+    today: { cost: 1.69, tokens: 120000 }, week: { cost: 12.4, tokens: 2_300_000 }, lastUpdated: new Date()
+  })
+
+  beforeEach(() => {
+    mocks.enabled = { claude: true, codex: true, grok: true, opencode: false }
+    mocks.quota = quota()
+    mocks.codex = codex()
+  })
+
+  it('follows Codex in the menu bar when chosen', () => {
+    mocks.trayProvider = 'codex'
+    create()
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('22% / 12%', { fontType: 'monospacedDigit' })
+    expect(currentBitmap().equals(renderGaugeBitmap(22, 12, 1, false))).toBe(true)
+  })
+
+  it('shows the highest bar of each window and the title of the most loaded provider', () => {
+    mocks.trayProvider = 'max'
+    mocks.codex = codex(60, 10)
+    create()
+    expect(currentBitmap().equals(renderGaugeBitmap(60, 32, 1, false))).toBe(true)
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('60% / 10%', { fontType: 'monospacedDigit' })
+  })
+
+  it('names both providers in detailed mode, with remaining percentages', () => {
+    mocks.mode = 'detailed'
+    mocks.showRemaining = true
+    create()
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('Claude 55% / 68% \u00b7 Codex 78% / 88%', { fontType: 'monospacedDigit' })
+  })
+
+  it('lists one tooltip block per enabled provider', () => {
+    mocks.usage.grok = { data: usage(), error: null }
+    create()
+    const blocks = mocks.tray.setToolTip.mock.lastCall![0].split('\n\n')
+    expect(blocks).toHaveLength(3)
+    expect(blocks[0]).toMatch(/^Claude Code\nSession: 45%/)
+    expect(blocks[1]).toMatch(/^Codex\nSession: 22% \(resets in 4h 30m\)\nWeekly: 12%/)
+    expect(blocks[1]).toContain('2 resets available')
+    expect(blocks[2]).toBe('Grok: Today $1.69 \u00b7 7d $12.40 \u00b7 2.3M tokens')
+  })
+
+  it('keeps Claude on the menu bar undimmed when Codex fails', () => {
+    mocks.codex = null
+    mocks.codexError = { type: 'auth', message: 'Codex is not signed in. Run `codex login` in a terminal.', retryable: false }
+    create()
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('45% / 32%', { fontType: 'monospacedDigit' })
+    expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, false))).toBe(true)
+    expect(mocks.tray.setToolTip.mock.lastCall![0]).toContain('Codex\nCodex is not signed in. Run codex login in a terminal.')
+  })
+
+  it('dims Highest only when both providers need attention', () => {
+    mocks.trayProvider = 'max'
+    mocks.codexError = { type: 'network', message: 'Offline', retryable: true }
+    mocks.codex = { ...codex(), error: mocks.codexError }
+    create()
+    expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, false))).toBe(true)
+    mocks.quota = { ...quota(), stale: true }
+    manager.refreshDisplay()
+    expect(currentBitmap().equals(renderGaugeBitmap(45, 32, 1, true))).toBe(true)
+  })
+
+  it('falls back to the other provider when one has no data', () => {
+    mocks.trayProvider = 'max'
+    mocks.quota = null
+    create()
+    expect(mocks.tray.setTitle).toHaveBeenLastCalledWith('22% / 12%', { fontType: 'monospacedDigit' })
   })
 })

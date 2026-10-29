@@ -23,10 +23,11 @@ vi.mock('electron', () => ({
     focus = vi.fn()
   }
 }))
-vi.mock('../src/main/tray', () => ({ trayManager: { getBounds: () => mocks.trayBounds } }))
+vi.mock('../src/main/tray', () => ({ trayManager: { getBounds: () => mocks.trayBounds }, broadcastProviders: vi.fn() }))
 vi.mock('../src/main/services/logger', () => ({ logger: {} }))
 vi.mock('../src/main/services/quota-api', () => ({ quotaService: { getCachedQuota: () => null, getLastError: () => mocks.error } }))
-vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { refresh: mocks.refresh } }))
+vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { refresh: mocks.refresh }, codexScheduler: { refresh: vi.fn() } }))
+vi.mock('../src/main/services/consumption', () => ({ consumptionService: { refresh: vi.fn() } }))
 
 const { WindowManager } = await import('../src/main/windows')
 

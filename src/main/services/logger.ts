@@ -9,7 +9,7 @@ log.transports.file.maxSize = 5 * 1024 * 1024 // 5MB
 // Set log file location
 log.transports.file.resolvePathFn = () => {
   const appPath = app.getPath('userData')
-  return `${appPath}/logs/claude-bar.log`
+  return `${appPath}/logs/burnbar.log`
 }
 
 // Custom format

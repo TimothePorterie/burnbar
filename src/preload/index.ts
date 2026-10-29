@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { QuotaInfo, QuotaError } from '../shared/types'
+import type { QuotaInfo, QuotaError, ProviderId, ProvidersSnapshot, TrayProvider } from '../shared/types'
 export type { QuotaErrorType, QuotaError, QuotaPeriod, ExtraUsageInfo, QuotaInfo } from '../shared/types'
 
 export interface Settings {
@@ -10,6 +10,7 @@ export interface Settings {
   enableNotifications: boolean
   language: 'en' | 'fr'
   theme: 'system' | 'light' | 'dark'
+  trayProvider: TrayProvider
 }
 
 export interface UserInfo {
@@ -27,6 +28,17 @@ const api = {
     const handler = (_event: Electron.IpcRendererEvent, quota: QuotaInfo): void => callback(quota)
     ipcRenderer.on('quota-updated', handler)
     return () => ipcRenderer.removeListener('quota-updated', handler)
+  },
+
+  // Providers
+  getProviders: (): Promise<ProvidersSnapshot | null> => ipcRenderer.invoke('get-providers'),
+  setProviderEnabled: (id: ProviderId, enabled: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('set-provider-enabled', id, enabled),
+  setTrayProvider: (provider: TrayProvider): Promise<boolean> => ipcRenderer.invoke('set-tray-provider', provider),
+  onProvidersUpdated: (callback: (snapshot: ProvidersSnapshot) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ProvidersSnapshot): void => callback(snapshot)
+    ipcRenderer.on('providers-updated', handler)
+    return () => ipcRenderer.removeListener('providers-updated', handler)
   },
 
   // Credentials
@@ -91,10 +103,10 @@ const api = {
   quitApp: (): Promise<void> => ipcRenderer.invoke('quit-app')
 }
 
-contextBridge.exposeInMainWorld('claudeBar', api)
+contextBridge.exposeInMainWorld('burnBar', api)
 
 declare global {
   interface Window {
-    claudeBar: typeof api
+    burnBar: typeof api
   }
 }

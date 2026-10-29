@@ -73,7 +73,7 @@ export function calculateResetProgress(resetsAt: Date, periodHours: number): num
 
 // A period whose reset time has passed has no active window until the next fetch: 0%, no reset time.
 // The API may report usage beyond the limit; the displayed share stays within 0-100%.
-function buildPeriod(utilization: number, resetsAt: Date, periodHours: number): QuotaPeriod {
+export function buildPeriod(utilization: number, resetsAt: Date, periodHours: number): QuotaPeriod {
   if (resetsAt.getTime() <= Date.now()) {
     return { utilization: 0, resetsAt: new Date(NaN), resetsIn: '—', resetProgress: 0 }
   }

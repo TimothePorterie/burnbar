@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Claude Bar</title>
+    <title>BurnBar</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -12,7 +12,6 @@
       <header class="header" id="header">
         <div class="identity">
           <span class="user-name" id="userName"></span>
-          <span class="plan" id="subscriptionBadge" hidden></span>
         </div>
         <button class="icon-btn" id="refreshBtn" data-i18n-title="popup.refreshShortcut">
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -22,62 +21,131 @@
         </button>
       </header>
 
-      <div class="status-banner" id="statusBanner" role="status" hidden>
-        <span id="statusMessage"></span>
-        <button class="link" id="statusDetails" data-i18n="status.details">Details</button>
-      </div>
-
-      <div class="alert" id="errorSection" role="alert" hidden>
-        <p class="selectable" id="errorMessage"></p>
-        <p class="alert-guidance selectable" id="errorGuidance"></p>
-        <div class="alert-actions">
-          <button class="btn" id="errorRetryBtn" data-i18n="popup.retry" data-i18n-title="popup.refreshShortcut">Retry</button>
-        </div>
-      </div>
-
-      <div class="skeleton" id="skeletonContainer" aria-hidden="true">
-        <div class="skeleton-row"><span></span><span></span><span></span></div>
-        <div class="skeleton-row"><span></span><span></span><span></span></div>
-      </div>
-
-      <section class="quotas" id="quotaCards" hidden>
-        <div class="quota" id="fiveHour">
-          <div class="quota-head">
-            <span class="quota-label" id="fiveHourLabel" data-i18n="popup.session">Session (5h)</span>
-            <span class="quota-value">--%</span>
+      <section class="provider" id="claudeSection">
+        <button class="section-head" aria-expanded="true">
+          <span class="section-name">Claude Code</span>
+          <span class="plan" id="subscriptionBadge" hidden></span>
+          <span class="section-summary" id="claudeSummary"></span>
+        </button>
+        <div class="section-body">
+          <div class="status-banner" id="statusBanner" role="status" hidden>
+            <span id="statusMessage"></span>
+            <button class="link" id="statusDetails" data-i18n="status.details">Details</button>
           </div>
-          <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="fiveHourLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
-          <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
-          <span class="quota-forecast" hidden></span>
-          <span class="pace-badge" hidden></span>
-        </div>
 
-        <div class="quota" id="sevenDay">
-          <div class="quota-head">
-            <span class="quota-label" id="sevenDayLabel" data-i18n="popup.weekly">Weekly (7d)</span>
-            <span class="quota-value">--%</span>
+          <div class="alert" id="errorSection" role="alert" hidden>
+            <p class="selectable" id="errorMessage"></p>
+            <p class="alert-guidance selectable" id="errorGuidance"></p>
+            <div class="alert-actions">
+              <button class="btn" id="errorRetryBtn" data-i18n="popup.retry" data-i18n-title="popup.refreshShortcut">Retry</button>
+            </div>
           </div>
-          <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="sevenDayLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
-          <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
-          <span class="quota-forecast" hidden></span>
-          <span class="pace-badge" hidden></span>
-        </div>
 
-        <div id="modelQuotas"></div>
-        <template id="modelQuotaTemplate">
-          <div class="quota compact">
-            <span class="quota-label"></span>
-            <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="meter-fill"></span><span class="meter-pace"></span></div>
-            <span class="quota-level"></span>
-            <span class="quota-value">--%</span>
+          <div class="skeleton" id="skeletonContainer" aria-hidden="true">
+            <div class="skeleton-row"><span></span><span></span><span></span></div>
+            <div class="skeleton-row"><span></span><span></span><span></span></div>
           </div>
-        </template>
 
-        <div class="extra" id="extraUsage" hidden>
-          <span class="quota-label" data-i18n="popup.overage">Overage</span>
-          <span class="extra-value" id="extraUsageValue">--</span>
+          <div class="quotas" id="quotaCards" hidden>
+            <div class="quota" id="fiveHour">
+              <div class="quota-head">
+                <span class="quota-label" id="fiveHourLabel" data-i18n="popup.session">Session (5h)</span>
+                <span class="quota-value">--%</span>
+              </div>
+              <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="fiveHourLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+              <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
+              <span class="quota-forecast" hidden></span>
+              <span class="pace-badge" hidden></span>
+            </div>
+
+            <div class="quota" id="sevenDay">
+              <div class="quota-head">
+                <span class="quota-label" id="sevenDayLabel" data-i18n="popup.weekly">Weekly (7d)</span>
+                <span class="quota-value">--%</span>
+              </div>
+              <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="sevenDayLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+              <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
+              <span class="quota-forecast" hidden></span>
+              <span class="pace-badge" hidden></span>
+            </div>
+
+            <div id="modelQuotas"></div>
+            <template id="modelQuotaTemplate">
+              <div class="quota compact">
+                <span class="quota-label"></span>
+                <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+                <span class="quota-level"></span>
+                <span class="quota-value">--%</span>
+              </div>
+            </template>
+
+            <div class="extra" id="extraUsage" hidden>
+              <span class="quota-label" data-i18n="popup.overage">Overage</span>
+              <span class="extra-value" id="extraUsageValue">--</span>
+            </div>
+          </div>
         </div>
       </section>
+
+      <section class="provider" id="codexSection" hidden>
+        <button class="section-head" aria-expanded="true">
+          <span class="section-name">Codex</span>
+          <span class="plan" id="codexPlan" hidden></span>
+          <span class="section-note" id="codexResets" hidden></span>
+          <span class="section-summary" id="codexSummary"></span>
+        </button>
+        <div class="section-body">
+          <div class="alert" id="codexError" role="alert" hidden>
+            <p class="selectable" id="codexErrorMessage"></p>
+          </div>
+          <div class="skeleton" id="codexSkeleton" aria-hidden="true">
+            <div class="skeleton-row"><span></span><span></span><span></span></div>
+          </div>
+          <div class="quotas" id="codexCards" hidden>
+            <div class="quota" id="codexFiveHour">
+              <div class="quota-head">
+                <span class="quota-label" id="codexFiveHourLabel" data-i18n="popup.session">Session (5h)</span>
+                <span class="quota-value">--%</span>
+              </div>
+              <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="codexFiveHourLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+              <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
+              <span class="quota-forecast" hidden></span>
+              <span class="pace-badge" hidden></span>
+            </div>
+            <div class="quota" id="codexSevenDay">
+              <div class="quota-head">
+                <span class="quota-label" id="codexSevenDayLabel" data-i18n="popup.weekly">Weekly (7d)</span>
+                <span class="quota-value">--%</span>
+              </div>
+              <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="codexSevenDayLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+              <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
+              <span class="quota-forecast" hidden></span>
+              <span class="pace-badge" hidden></span>
+            </div>
+            <span class="section-age" id="codexUpdated"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="provider" id="usageSection" hidden>
+        <button class="section-head" aria-expanded="true">
+          <span class="section-name" data-i18n="popup.usage">Usage</span>
+        </button>
+        <div class="section-body usage">
+          <div class="usage-row" id="grokUsage" hidden>
+            <span class="quota-label">Grok</span>
+            <span class="usage-value selectable"></span>
+            <span class="usage-note selectable" hidden></span>
+          </div>
+          <div class="usage-row" id="opencodeUsage" hidden>
+            <span class="quota-label">OpenCode</span>
+            <span class="usage-value selectable"></span>
+            <span class="usage-note selectable" hidden></span>
+          </div>
+        </div>
+      </section>
+
+      <p class="empty-hint" id="noProviders" data-i18n="popup.noProviders" hidden></p>
 
       <footer class="footer" id="footer" hidden>
         <span id="lastUpdated"></span>

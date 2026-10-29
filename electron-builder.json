@@ -1,6 +1,7 @@
 {
   "appId": "com.claude-bar.app",
-  "productName": "Claude Bar",
+  "productName": "BurnBar",
+  "artifactName": "${productName}-${version}-${arch}.${ext}",
   "directories": {
     "output": "release",
     "buildResources": "assets"
@@ -22,7 +23,7 @@
   ],
   "mac": {
     "category": "public.app-category.utilities",
-    "icon": "assets/app-icon.icns",
+    "icon": "assets/icon.png",
     "target": [
       {
         "target": "dmg",
@@ -42,8 +43,7 @@
   },
   "dmg": {
     "artifactName": "${productName}-${version}-${arch}.${ext}",
-    "title": "Claude Bar",
-    "icon": "assets/app-icon.icns",
+    "title": "BurnBar",
     "contents": [
       {
         "x": 130,
@@ -60,7 +60,7 @@
   "publish": {
     "provider": "github",
     "owner": "TimothePorterie",
-    "repo": "claude-bar",
+    "repo": "burnbar",
     "releaseType": "release"
   }
 }

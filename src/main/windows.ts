@@ -1,9 +1,11 @@
 import { BrowserWindow, screen, app, session, ipcMain, systemPreferences } from 'electron'
 import { join } from 'path'
-import { trayManager } from './tray'
+import { broadcastProviders, trayManager } from './tray'
 import { logger } from './services/logger'
 import { quotaService } from './services/quota-api'
-import { schedulerService } from './services/scheduler'
+import { codexScheduler, schedulerService } from './services/scheduler'
+import { consumptionService } from './services/consumption'
+import { t } from '../shared/i18n'
 
 // Content Security Policy
 const CSP = [
@@ -97,8 +99,11 @@ export class WindowManager {
     const error = quotaService.getLastError()
     if (quota) this.sendToPopup('quota-updated', quota)
     else if (error) this.sendToPopup('quota-error', error)
+    broadcastProviders()
     // Outdated or failed data is refetched when looked at; the throttle keeps recent data as is
     void schedulerService.refresh()
+    void codexScheduler.refresh()
+    void consumptionService.refresh()
     // Activate the app so the popup becomes key and receives blur when clicking elsewhere
     app.focus({ steal: true })
     this.popupWindow.show()
@@ -258,7 +263,10 @@ export class WindowManager {
       } else if (input.meta && !input.alt && !input.control && !input.shift) {
         if (!['r', ',', 'q'].includes(key)) return
         event.preventDefault()
-        if (key === 'r') void schedulerService.refresh(true)
+        if (key === 'r') {
+          void schedulerService.refresh(true)
+          void codexScheduler.refresh(true)
+        }
         if (key === ',') this.showSettings()
         if (key === 'q') app.quit()
       }
@@ -292,8 +300,8 @@ export class WindowManager {
 
     this.settingsWindow = new BrowserWindow({
       width: 420,
-      height: 570,
-      title: 'Claude Bar Settings',
+      height: 850,
+      title: t('settings.windowTitle'),
       resizable: false,
       minimizable: true,
       maximizable: false,

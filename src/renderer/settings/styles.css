@@ -205,3 +205,7 @@ select {
   from { transform: translateX(-100%); }
   to { transform: translateX(340%); }
 }
+
+.provider-status[data-status='error'] { color: var(--warn); }
+.provider-status[data-status='connected'],
+.provider-status[data-status='installed'] { color: var(--ok); }

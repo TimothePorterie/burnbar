@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { QuotaInfo } from '../src/shared/types'
+import type { CodexQuota, QuotaInfo } from '../src/shared/types'
 import { setLocale } from '../src/shared/i18n'
 
 const store: Record<string, unknown> = {}
@@ -22,6 +22,8 @@ vi.mock('electron', () => ({
 const period = (hours: number) => ({ utilization: 0, resetsAt: new Date(Date.now() + hours * 3600000), resetsIn: '', resetProgress: 50 })
 const quota: QuotaInfo = { fiveHour: period(5), sevenDay: period(168), models: [], lastUpdated: new Date() }
 vi.mock('../src/main/services/quota-api', () => ({ quotaService: { getCachedQuota: () => quota } }))
+let codex: CodexQuota | null = null
+vi.mock('../src/main/services/codex', () => ({ codexService: { getCachedQuota: () => codex } }))
 
 const { NotificationService } = await import('../src/main/services/notifications')
 
@@ -35,6 +37,7 @@ beforeEach(() => {
   delete quota.error
   delete quota.stale
   delete quota.extraUsage
+  codex = null
   shown.mockReset()
   notificationOptions.mockReset()
   vi.useRealTimers()
@@ -234,5 +237,46 @@ describe('NotificationService', () => {
       expect(shown).not.toHaveBeenCalled()
       expect(store.extraUsageNotified).toEqual({ used: 0, levels: [] })
     })
+  })
+})
+
+describe('Codex notifications', () => {
+  const codexQuota = (five: number): CodexQuota => ({
+    fiveHour: { ...period(5), utilization: five }, sevenDay: period(168), resetsAvailable: 0, limitReached: false, lastUpdated: new Date()
+  })
+
+  it('uses the Claude thresholds with Codex labels and separate levels', () => {
+    const service = new NotificationService()
+    quota.fiveHour!.utilization = 75
+    service.checkAndNotify()
+    codex = codexQuota(75)
+    service.checkCodex()
+    service.checkCodex()
+    expect(shown.mock.calls).toEqual([['Session (5h) at 75%'], ['Codex session at 75%']])
+    expect(store.notifiedLevels).toMatchObject({ fiveHour: 'warning', 'codex.fiveHour': 'warning' })
+  })
+
+  it('announces a Codex reset after high use', () => {
+    vi.useFakeTimers()
+    const service = new NotificationService()
+    codex = codexQuota(80)
+    service.checkCodex()
+    vi.advanceTimersByTime(5 * 3600000 + 1000)
+    codex = { ...codexQuota(0), fiveHour: undefined }
+    shown.mockReset()
+    service.checkCodex()
+    expect(shown).toHaveBeenCalledExactlyOnceWith('Codex session quota reset')
+  })
+
+  it('ignores stale or failed Codex data, and the Alerts switch', () => {
+    const service = new NotificationService()
+    codex = { ...codexQuota(95), stale: true }
+    service.checkCodex()
+    codex = { ...codexQuota(95), error: { type: 'network', message: 'x', retryable: true } }
+    service.checkCodex()
+    store.enableNotifications = false
+    codex = codexQuota(95)
+    service.checkCodex()
+    expect(shown).not.toHaveBeenCalled()
   })
 })

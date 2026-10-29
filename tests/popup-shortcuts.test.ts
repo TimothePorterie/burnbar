@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const quit = vi.fn()
 const refresh = vi.fn().mockResolvedValue(undefined)
+const codexRefresh = vi.fn().mockResolvedValue(undefined)
 vi.mock('electron', () => ({
   app: { isReady: () => false, once: vi.fn(), isPackaged: true, quit },
   BrowserWindow: class extends EventEmitter {
@@ -15,10 +16,11 @@ vi.mock('electron', () => ({
     loadFile = vi.fn()
   }
 }))
-vi.mock('../src/main/tray', () => ({ trayManager: {} }))
+vi.mock('../src/main/tray', () => ({ trayManager: {}, broadcastProviders: vi.fn() }))
 vi.mock('../src/main/services/logger', () => ({ logger: {} }))
 vi.mock('../src/main/services/quota-api', () => ({ quotaService: {} }))
-vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { refresh } }))
+vi.mock('../src/main/services/scheduler', () => ({ schedulerService: { refresh }, codexScheduler: { refresh: codexRefresh } }))
+vi.mock('../src/main/services/consumption', () => ({ consumptionService: { refresh: vi.fn() } }))
 
 const { WindowManager } = await import('../src/main/windows')
 
@@ -43,6 +45,7 @@ describe('popup shortcuts', () => {
     popup.webContents.emit('before-input-event', event, input('r'))
     expect(event.preventDefault).toHaveBeenCalledOnce()
     expect(refresh).toHaveBeenCalledExactlyOnceWith(true)
+    expect(codexRefresh).toHaveBeenCalledExactlyOnceWith(true)
   })
 
   it('opens Settings on Command-comma', () => {

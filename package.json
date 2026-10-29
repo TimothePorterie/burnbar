@@ -1,9 +1,9 @@
 {
-  "name": "claude-bar",
+  "name": "burnbar",
   "version": "1.8.0",
-  "description": "macOS Menu Bar app for Claude Code quotas",
+  "description": "Menu bar monitor for AI coding tool quotas: Claude Code, Codex, Grok, OpenCode",
   "main": "dist/main/index.js",
-  "author": "Claude Bar",
+  "author": "BurnBar",
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",

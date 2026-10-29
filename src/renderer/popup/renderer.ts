@@ -1,8 +1,10 @@
 // Popup renderer script
 import type { Locale } from '../../shared/i18n'
 import { t, setLocale, getLocale, applyI18n } from '../../shared/i18n'
-import { WARNING_THRESHOLD, CRITICAL_THRESHOLD, formatDuration, formatRetry, formatUpdated, getForecast } from '../../shared/quota'
-import type { QuotaError, QuotaErrorType, QuotaInfo, QuotaPeriod } from '../../shared/types'
+import { WARNING_THRESHOLD, CRITICAL_THRESHOLD, formatDuration, formatRetry, formatUpdated, formatUsage, getForecast } from '../../shared/quota'
+import type {
+  CodexQuota, ConsumptionInfo, ProviderId, ProvidersSnapshot, ProviderView, QuotaError, QuotaErrorType, QuotaInfo, QuotaPeriod
+} from '../../shared/types'
 
 // DOM elements
 const popup = document.getElementById('popup') as HTMLElement
@@ -18,6 +20,14 @@ const statusBanner = document.getElementById('statusBanner') as HTMLElement
 const statusMessage = document.getElementById('statusMessage') as HTMLElement
 let statusUrl = 'https://status.claude.com/'
 let showRemaining = false
+let snapshot: ProvidersSnapshot | null = null
+let claudeView: 'loading' | 'data' | 'error' | 'signedOut' = 'loading'
+
+const claudeSection = document.getElementById('claudeSection') as HTMLElement
+const claudeSummary = document.getElementById('claudeSummary') as HTMLElement
+const codexSection = document.getElementById('codexSection') as HTMLElement
+const usageSection = document.getElementById('usageSection') as HTMLElement
+const noProviders = document.getElementById('noProviders') as HTMLElement
 
 const fiveHourRow = document.getElementById('fiveHour') as HTMLElement
 const sevenDayRow = document.getElementById('sevenDay') as HTMLElement
@@ -128,6 +138,7 @@ function updateQuotaDisplay(quota: QuotaInfo): void {
   statusUrl = status?.incident?.url ?? 'https://status.claude.com/'
   renderPeriod(fiveHourRow, quota.fiveHour, 5)
   renderPeriod(sevenDayRow, quota.sevenDay)
+  renderSummary(claudeSummary, quota.fiveHour, quota.sevenDay, !!quota.error || !!quota.stale)
 
   modelQuotas.replaceChildren(...quota.models.map(model => {
     const row = modelTemplate.content.firstElementChild!.cloneNode(true) as HTMLElement
@@ -161,16 +172,32 @@ function updateQuotaDisplay(quota: QuotaInfo): void {
   }
 }
 
-function setView(view: 'loading' | 'data' | 'error' | 'signedOut'): void {
-  if (view !== 'data') statusBanner.hidden = true
-  popup.setAttribute('aria-busy', String(view === 'loading'))
-  header.hidden = view === 'signedOut'
-  skeletonContainer.hidden = view !== 'loading'
-  quotaCards.hidden = view !== 'data'
-  footer.hidden = view !== 'data'
-  notConnected.hidden = view !== 'signedOut'
-  if (view === 'signedOut') errorSection.hidden = true
+const enabled = (): Record<ProviderId, boolean> => snapshot?.enabled ?? { claude: true, codex: false, grok: false, opencode: false }
+// Claude alone keeps the full-page signed-out card; with other tools it is an alert in its section
+const claudeOnly = (): boolean => { const on = enabled(); return on.claude && !on.codex && !on.grok && !on.opencode }
+
+function layout(): void {
+  const on = enabled()
+  const signedOutPage = claudeOnly() && claudeView === 'signedOut'
+  if (claudeView !== 'data') statusBanner.hidden = true
+  popup.setAttribute('aria-busy', String(on.claude && claudeView === 'loading'))
+  header.hidden = signedOutPage
+  claudeSection.hidden = !on.claude || signedOutPage
+  skeletonContainer.hidden = claudeView !== 'loading'
+  quotaCards.hidden = claudeView !== 'data'
+  notConnected.hidden = !signedOutPage
+  codexSection.hidden = !on.codex
+  usageSection.hidden = !on.grok && !on.opencode
+  noProviders.hidden = Object.values(on).some(Boolean)
+  footer.hidden = signedOutPage || (claudeOnly() && claudeView !== 'data')
+  lastUpdated.hidden = !on.claude || claudeView !== 'data'
   reportContentHeight()
+}
+
+function setView(view: typeof claudeView): void {
+  claudeView = view
+  if (view === 'signedOut') errorSection.hidden = true
+  layout()
 }
 
 function showQuota(quota: QuotaInfo): void {
@@ -181,6 +208,7 @@ function showQuota(quota: QuotaInfo): void {
 function showSignedOut(message = t('popup.notConnectedDesc')): void {
   renderCode(document.getElementById('notConnectedDesc')!, message)
   setView('signedOut')
+  if (!claudeOnly()) showError({ type: 'auth', message, retryable: false })
 }
 
 function showFetchErrorState(error: QuotaError): void {
@@ -195,8 +223,9 @@ function showFetchErrorState(error: QuotaError): void {
 }
 
 async function loadUserInfo(): Promise<void> {
+  if (!enabled().claude) return
   try {
-    const userInfo = await window.claudeBar.getUserInfo()
+    const userInfo = await window.burnBar.getUserInfo()
     userName.textContent = userInfo?.name || userInfo?.email || t('popup.defaultUser')
     const plan = PLANS[(userInfo?.subscriptionType ?? '').toLowerCase().replace(/^claude_/, '')]
     subscriptionBadge.textContent = plan ?? ''
@@ -207,9 +236,14 @@ async function loadUserInfo(): Promise<void> {
 }
 
 async function loadQuota(): Promise<void> {
+  if (!enabled().claude) {
+    userName.textContent = 'BurnBar'
+    layout()
+    return
+  }
   try {
     // Check cache first — show data immediately if available (avoids skeleton flash)
-    const cachedQuota = await window.claudeBar.getQuota()
+    const cachedQuota = await window.burnBar.getQuota()
     if (cachedQuota) {
       await loadUserInfo()
       showQuota(cachedQuota)
@@ -218,7 +252,7 @@ async function loadQuota(): Promise<void> {
 
     setView('loading')
 
-    const hasCredentials = await window.claudeBar.hasCredentials()
+    const hasCredentials = await window.burnBar.hasCredentials()
 
     if (!hasCredentials) {
       showSignedOut()
@@ -227,12 +261,98 @@ async function loadQuota(): Promise<void> {
 
     await loadUserInfo()
 
-    const lastError = await window.claudeBar.getLastError()
+    const lastError = await window.burnBar.getLastError()
     if (lastError) showFetchErrorState(lastError)
   } catch (error) {
     console.error('Failed to load quota:', error)
     showFetchErrorState({ type: 'unknown', message: t('error.loading'), retryable: true })
   }
+}
+
+// Shown in a collapsed section head
+function renderSummary(element: HTMLElement, fiveHour: QuotaPeriod | undefined, sevenDay: QuotaPeriod | undefined, warn: boolean): void {
+  const pct = (period: QuotaPeriod | undefined): string =>
+    period ? `${Math.round(showRemaining ? 100 - period.utilization : period.utilization)}%` : '\u2014'
+  element.textContent = `${pct(fiveHour)} / ${pct(sevenDay)}`
+  element.toggleAttribute('data-warn', warn)
+}
+
+function renderCodex({ data: quota, error: lastError }: ProviderView<CodexQuota>): void {
+  const plan = document.getElementById('codexPlan') as HTMLElement
+  plan.textContent = quota?.plan ?? ''
+  plan.hidden = !quota?.plan
+  const resets = document.getElementById('codexResets') as HTMLElement
+  const count = quota?.resetsAvailable ?? 0
+  resets.textContent = count ? t(count === 1 ? 'codex.resetAvailable' : 'codex.resetsAvailable', { count }) : ''
+  resets.hidden = !count
+
+  const error = quota?.error ?? lastError
+  const message = [error && [error.message, formatRetry(error.retryAt)].filter(Boolean).join(' '),
+    quota?.limitReached ? t('codex.limitReached') : ''].filter(Boolean).join(' ')
+  const alert = document.getElementById('codexError') as HTMLElement
+  renderCode(document.getElementById('codexErrorMessage')!, message)
+  alert.dataset.tone = error?.retryable ? 'warn' : 'crit'
+  alert.hidden = !message
+
+  document.getElementById('codexSkeleton')!.hidden = !!quota || !!error
+  document.getElementById('codexCards')!.hidden = !quota
+  const summary = document.getElementById('codexSummary') as HTMLElement
+  summary.textContent = ''
+  if (!quota) return
+  renderPeriod(document.getElementById('codexFiveHour')!, quota.fiveHour, 5)
+  renderPeriod(document.getElementById('codexSevenDay')!, quota.sevenDay)
+  renderSummary(summary, quota.fiveHour, quota.sevenDay, !!error || !!quota.stale)
+  const updated = document.getElementById('codexUpdated') as HTMLElement
+  updated.textContent = formatUpdated(quota.lastUpdated)
+  updated.title = new Date(quota.lastUpdated).toLocaleString(getLocale())
+  updated.toggleAttribute('data-warn', !!quota.stale || !!error)
+}
+
+function renderUsage(row: HTMLElement, { data, error }: ProviderView<ConsumptionInfo>): void {
+  row.querySelector('.usage-value')!.textContent = data ? formatUsage(data) : error ? '' : '\u2014'
+  const note = row.querySelector('.usage-note') as HTMLElement
+  renderCode(note, error?.message ?? '')
+  note.hidden = !error
+  row.title = data ? formatUpdated(data.lastUpdated) : ''
+}
+
+function renderProviders(): void {
+  if (snapshot) {
+    const on = snapshot.enabled
+    if (on.codex) renderCodex(snapshot.codex)
+    const grok = document.getElementById('grokUsage') as HTMLElement
+    const opencode = document.getElementById('opencodeUsage') as HTMLElement
+    grok.hidden = !on.grok
+    opencode.hidden = !on.opencode
+    if (on.grok) renderUsage(grok, snapshot.grok)
+    if (on.opencode) renderUsage(opencode, snapshot.opencode)
+  }
+  layout()
+}
+
+// Collapsed sections are remembered per section
+for (const head of document.querySelectorAll<HTMLButtonElement>('.section-head')) {
+  const section = head.parentElement!
+  const key = `collapsed.${section.id}`
+  const collapse = (collapsed: boolean): void => {
+    section.toggleAttribute('data-collapsed', collapsed)
+    head.setAttribute('aria-expanded', String(!collapsed))
+  }
+  try {
+    collapse(localStorage.getItem(key) === '1')
+  } catch {
+    // storage unavailable: sections stay open
+  }
+  head.addEventListener('click', () => {
+    const collapsed = !section.hasAttribute('data-collapsed')
+    collapse(collapsed)
+    try {
+      localStorage.setItem(key, collapsed ? '1' : '0')
+    } catch {
+      // not remembered
+    }
+    reportContentHeight()
+  })
 }
 
 const toast = document.getElementById('toast') as HTMLElement
@@ -252,14 +372,14 @@ async function refreshQuota(): Promise<void> {
 
   try {
     // May return the cache when the minimum interval has not elapsed
-    const result = await window.claudeBar.refreshQuota()
+    const result = await window.burnBar.refreshQuota()
     if (result.quota) {
       await loadUserInfo()
       showQuota(result.quota)
       // A throttled refresh during an error is explained by the alert, not "up to date"
       if (result.throttled && !result.quota.error) showToast(t('popup.throttled', { seconds: result.retryIn }))
     } else {
-      const error = await window.claudeBar.getLastError()
+      const error = await window.burnBar.getLastError()
       if (error) showFetchErrorState(error)
     }
   } catch (error) {
@@ -274,39 +394,46 @@ async function refreshQuota(): Promise<void> {
 }
 
 // Event listeners
-document.getElementById('statusDetails')!.addEventListener('click', () => void window.claudeBar.openStatusPage(statusUrl))
+document.getElementById('statusDetails')!.addEventListener('click', () => void window.burnBar.openStatusPage(statusUrl))
 refreshBtn.addEventListener('click', refreshQuota)
 errorRetryBtn.addEventListener('click', refreshQuota)
 
-const openSettings = (): void => void window.claudeBar.openSettings()
+const openSettings = (): void => void window.burnBar.openSettings()
 document.getElementById('signedOutRetryBtn')!.addEventListener('click', refreshQuota)
 document.getElementById('signedOutSettingsLink')!.addEventListener('click', openSettings)
-document.getElementById('quitBtn')!.addEventListener('click', () => void window.claudeBar.quitApp())
+document.getElementById('quitBtn')!.addEventListener('click', () => void window.burnBar.quitApp())
 document.getElementById('settingsLink')!.addEventListener('click', openSettings)
 
 // Listen for quota updates from main process
 // Claude Code may have switched account since the popup was built
-window.claudeBar.onQuotaUpdated(async (quota) => {
+window.burnBar.onQuotaUpdated(async (quota) => {
   await loadUserInfo()
   showQuota(quota)
 })
 
 // Listen for quota errors from main process
-window.claudeBar.onQuotaError(showFetchErrorState)
+window.burnBar.onQuotaError(showFetchErrorState)
+
+window.burnBar.onProvidersUpdated((update) => {
+  snapshot = update
+  renderProviders()
+})
 
 // Report content height to resize window
 function reportContentHeight(): void {
   requestAnimationFrame(() => {
-    window.claudeBar.reportContentHeight(popup.scrollHeight)
+    window.burnBar.reportContentHeight(popup.scrollHeight)
   })
 }
 
 // Initialize locale then load
 async function init(): Promise<void> {
-  const settings = await window.claudeBar.getSettings()
+  const settings = await window.burnBar.getSettings()
   showRemaining = settings.showRemaining
   setLocale(settings.language as Locale)
   applyI18n()
+  snapshot = await window.burnBar.getProviders()
+  renderProviders()
   await loadQuota()
 }
 

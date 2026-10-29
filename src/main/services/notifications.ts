@@ -1,5 +1,6 @@
 import { Notification } from 'electron'
 import { quotaService } from './quota-api'
+import { codexService } from './codex'
 import { settingsStore } from './settings-store'
 import { logger } from './logger'
 import { getLocale, t } from '../../shared/i18n'
@@ -16,10 +17,35 @@ export class NotificationService {
 
     const levels = { ...settingsStore.get('notifiedLevels') }
     const resets = { ...settingsStore.get('resetNotifications') }
-    for (const [key, period, label] of [
-      ['fiveHour', quota.fiveHour, t('popup.session')],
-      ['sevenDay', quota.sevenDay, t('popup.weekly')]
-    ] as const) {
+    this.checkWindows(levels, resets, '', quota.fiveHour, quota.sevenDay)
+    for (const model of quota.models) {
+      this.checkPeriod(levels, model.key, model.label, model.period)
+    }
+    delete levels.sevenDayOpus
+    settingsStore.set('notifiedLevels', levels)
+    settingsStore.set('resetNotifications', resets)
+    if (quota.extraUsage?.isEnabled) this.checkExtraUsage(quota.extraUsage)
+  }
+
+  // Same thresholds and reset notices, stored under `codex.` keys
+  checkCodex(): void {
+    if (!settingsStore.get('enableNotifications')) return
+    const quota = codexService.getCachedQuota()
+    if (!quota || quota.error || quota.stale) return
+
+    const levels = { ...settingsStore.get('notifiedLevels') }
+    const resets = { ...settingsStore.get('resetNotifications') }
+    this.checkWindows(levels, resets, 'codex.', quota.fiveHour, quota.sevenDay)
+    settingsStore.set('notifiedLevels', levels)
+    settingsStore.set('resetNotifications', resets)
+  }
+
+  private checkWindows(
+    levels: Record<string, QuotaLevel>, resets: Record<string, { resetsAt: number; utilization: number }>,
+    prefix: '' | 'codex.', fiveHour: QuotaPeriod | undefined, sevenDay: QuotaPeriod | undefined
+  ): void {
+    for (const [name, period] of [['fiveHour', fiveHour], ['sevenDay', sevenDay]] as const) {
+      const key = prefix + name
       let previous: (typeof resets)[string] | undefined = resets[key]
       // Fire once the stored reset time has passed, even if the API has no new window yet
       if (previous && Date.now() >= previous.resetsAt && previous.utilization >= WARNING_THRESHOLD) {
@@ -33,15 +59,8 @@ export class NotificationService {
         resets[key] = { resetsAt, utilization: previous?.resetsAt === resetsAt
           ? Math.max(previous.utilization, period.utilization) : period.utilization }
       }
-      this.checkPeriod(levels, key, label, period)
+      this.checkPeriod(levels, key, t(prefix ? `notification.${key}` : name === 'fiveHour' ? 'popup.session' : 'popup.weekly'), period)
     }
-    for (const model of quota.models) {
-      this.checkPeriod(levels, model.key, model.label, model.period)
-    }
-    delete levels.sevenDayOpus
-    settingsStore.set('notifiedLevels', levels)
-    settingsStore.set('resetNotifications', resets)
-    if (quota.extraUsage?.isEnabled) this.checkExtraUsage(quota.extraUsage)
   }
 
   private checkExtraUsage(extra: ExtraUsageInfo): void {

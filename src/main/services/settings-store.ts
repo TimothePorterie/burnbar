@@ -1,7 +1,9 @@
 import Store from 'electron-store'
 import { app } from 'electron'
-import { rmSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, rmSync } from 'fs'
 import { join } from 'path'
+import { logger } from './logger'
+import type { ProviderId, TrayProvider } from '../../shared/types'
 
 interface PersistedQuotaPeriod {
   utilization: number
@@ -30,9 +32,20 @@ interface SettingsStoreSchema {
   notifiedLevels: Record<string, 'normal' | 'warning' | 'critical'>
   extraUsageNotified?: { used: number; levels: ('started' | '50' | '90')[] }
   lastAccount: string | null
+  providers?: Record<ProviderId, boolean> // absent until first-launch detection
+  trayProvider: TrayProvider
 }
 
 export type { PersistedQuotaData }
+
+const userData = app.getPath('userData')
+const configPath = join(userData, 'config.json')
+const legacyConfigPath = join(app.getPath('appData'), 'claude-bar', 'config.json')
+if (!existsSync(configPath) && existsSync(legacyConfigPath)) {
+  mkdirSync(userData, { recursive: true })
+  copyFileSync(legacyConfigPath, configPath)
+  logger.info('Migrated previous app settings to BurnBar')
+}
 
 export const settingsStore = new Store<SettingsStoreSchema>({
   clearInvalidConfig: true,
@@ -48,7 +61,8 @@ export const settingsStore = new Store<SettingsStoreSchema>({
     displayMode: 'standard',
     resetNotifications: {},
     notifiedLevels: {},
-    lastAccount: null
+    lastAccount: null,
+    trayProvider: 'claude'
   }
 })
 

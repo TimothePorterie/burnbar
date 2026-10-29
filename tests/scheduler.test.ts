@@ -13,6 +13,8 @@ const { idleTime, fetchQuota, getCachedQuota, getLastError, cooldown, throttled,
 })
 vi.mock('electron', () => ({ powerMonitor: { getSystemIdleTime: idleTime } }))
 vi.mock('../src/main/services/quota-api', () => ({ quotaService }))
+vi.mock('../src/main/services/codex', () => ({ codexService: {} }))
+vi.mock('../src/main/services/providers', () => ({ isProviderEnabled: () => true }))
 vi.mock('../src/main/services/logger', () => ({ logger: { info, warn: vi.fn(), error: vi.fn() } }))
 
 import { SchedulerService } from '../src/main/services/scheduler'
@@ -33,6 +35,8 @@ beforeEach(() => {
   quotaService.nextRetryAt = 0
   quotaService.idlePaused = false
   getCachedQuota.mockImplementation(() => quota)
+  // As in quotaService: the cached quota carries the last error
+  getLastError.mockImplementation(() => quota.error ?? null)
   fetchQuota.mockImplementation(async () => {
     quota.lastUpdated = new Date()
     return quota

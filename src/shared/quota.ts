@@ -1,4 +1,5 @@
-import { t } from './i18n'
+import { getLocale, t } from './i18n'
+import type { ConsumptionInfo } from './types'
 
 export const WARNING_THRESHOLD = 70
 export const CRITICAL_THRESHOLD = 90
@@ -50,4 +51,10 @@ export function formatUpdated(lastUpdated: Date | string | number, now = Date.no
 export function formatRetry(retryAt: number | undefined, now = Date.now()): string {
   if (!retryAt) return ''
   return retryAt - now < 60000 ? t('error.retryingSoon') : t('error.nextTry', { time: formatDuration(retryAt - now) })
+}
+
+export function formatUsage(info: ConsumptionInfo): string {
+  const money = new Intl.NumberFormat(getLocale(), { style: 'currency', currency: 'USD', currencyDisplay: 'narrowSymbol' })
+  const tokens = new Intl.NumberFormat(getLocale(), { notation: 'compact', maximumFractionDigits: 1 })
+  return t('usage.summary', { today: money.format(info.today.cost), week: money.format(info.week.cost), tokens: tokens.format(info.week.tokens) })
 }

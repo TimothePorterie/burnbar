@@ -257,7 +257,7 @@ describe('QuotaService', () => {
     const service = new QuotaService()
     expect(await service.fetchQuota(true)).toBeNull()
     expect(service.getLastError()).toMatchObject({
-      type: 'unknown', retryable: true, message: 'Anthropic sent an unexpected response. Update Claude Bar if this persists.'
+      type: 'unknown', retryable: true, message: 'Anthropic sent an unexpected response. Update BurnBar if this persists.'
     })
   })
 
