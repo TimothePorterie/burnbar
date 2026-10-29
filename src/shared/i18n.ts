@@ -36,6 +36,10 @@ const en: Record<string, string> = {
   // Settings
   'settings.title': 'Settings',
   'settings.language': 'Language',
+  'settings.theme': 'Appearance',
+  'settings.themeSystem': 'Auto',
+  'settings.themeLight': 'Light',
+  'settings.themeDark': 'Dark',
   'settings.languageLabel': 'Display language',
   'settings.connection': 'Connection',
   'settings.connected': 'Connected',
@@ -160,6 +164,10 @@ const fr: Record<string, string> = {
   // Settings
   'settings.title': 'R\u00e9glages',
   'settings.language': 'Langue',
+  'settings.theme': 'Apparence',
+  'settings.themeSystem': 'Auto',
+  'settings.themeLight': 'Clair',
+  'settings.themeDark': 'Sombre',
   'settings.languageLabel': 'Langue d\u2019affichage',
   'settings.connection': 'Connexion',
   'settings.connected': 'Connect\u00e9',

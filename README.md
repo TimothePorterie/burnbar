@@ -33,7 +33,7 @@
 - **Visual Feedback** — The refresh button spins while loading. If a refresh is throttled, a toast overlays the popup
 - **Tooltips** — Hover the menu bar icon for each quota, the time until it resets, and when the numbers were last updated
 - **Keyboard** — In the popup: Esc closes, ⌘R refreshes, ⌘, opens Settings, ⌘Q quits. The footer has a Quit button.
-- **Dark Mode** — Follows the macOS appearance
+- **Light / Dark** — Follows macOS by default, or force Light or Dark in Settings (Appearance)
 - **Lightweight** — Runs quietly in the background with minimal resource usage
 - **Native Feel** — Uses macOS vibrancy effects for a native look
 - **Languages** — English and French
@@ -144,6 +144,7 @@ Thresholds are fixed.
 Access settings via right-click → Settings, or ⌘, from the popup. The window is grouped into Account, General, and Updates:
 
 - **Account**: connected or not, from the Keychain. Email or name, and the plan when present. A hint to run `claude`. **Refresh** re-reads that status.
+- **Appearance**: Auto (follows macOS), Light, or Dark
 - **Language**: English or French
 - **Refresh every**: 5, 10, or 15 minutes
 - **Alerts**: System notifications at 70% and 90%, and the reset notification

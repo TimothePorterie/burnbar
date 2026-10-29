@@ -134,7 +134,7 @@ Tokens live in `src/renderer/shared/tokens.css` (light, and dark via `prefers-co
 
 `--accent` is `#D97757`. Primary buttons, the selected segment, the on switch, the update bar, and links use `--accent-strong` (derived). The plan badge border uses `--accent`. Quota meters do not.
 
-Settings is grouped like System Settings: **Account**, **General**, **Updates**. Account is the Keychain status (dot, "Connected" / "Not Connected", email or display name, plan), a Refresh button, and the `claude` hint. Refresh is a segmented control **5 min | 10 min | 15 min**. Alerts and launch-at-login are switches. Language is a select. The login-item hint row is hidden unless `launchAtLoginStatus` is `requires-approval`.
+Settings is grouped like System Settings: **Account**, **General**, **Updates**. Account is the Keychain status (dot, "Connected" / "Not Connected", email or display name, plan), a Refresh button, and the `claude` hint. Refresh is a segmented control **5 min | 10 min | 15 min**. Alerts and launch-at-login are switches. Appearance is a segmented control **Auto | Light | Dark** (`theme`): it sets `nativeTheme.themeSource`, which switches `prefers-color-scheme` in every window and the native vibrancy, so `tokens.css` needs no theme class. Language is a select. The login-item hint row is hidden unless `launchAtLoginStatus` is `requires-approval`.
 
 Accessibility: meters and the update bar are `role="progressbar"` with `aria-valuenow`; `:focus-visible` uses the accent focus ring; `prefers-reduced-motion: reduce` disables animations and transitions. `prefers-contrast: more` sets secondary ink to `--ink`, hairline to `currentColor`, and a 1 px border on `.meter`. `prefers-reduced-transparency: reduce` uses an opaque surface (`#fff`, `#292826` in dark) and an opaque page background (`#F5F3EF`, `#1F1E1D` in dark). Segmented controls are `radiogroup` / `radio`. Switches are `role="switch"`.
 
@@ -236,11 +236,12 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
 | `refresh-quota` | renderer -> main | Force refresh. Returns `{ quota, throttled, retryIn }` |
 | `has-credentials` | renderer -> main | Keychain item `Claude Code-credentials` exists |
 | `get-user-info` | renderer -> main | Email, display name, subscription type from that item |
-| `get-settings` | renderer -> main | `refreshInterval`, `launchAtLogin`, `launchAtLoginStatus` (packaged only), `enableNotifications`, `language` |
+| `get-settings` | renderer -> main | `refreshInterval`, `launchAtLogin`, `launchAtLoginStatus` (packaged only), `enableNotifications`, `language`, `theme` |
 | `set-refresh-interval` | renderer -> main | 300, 600, or 900 |
 | `set-launch-at-login` | renderer -> main | Stores the flag. Packaged builds also call `setLoginItemSettings` |
 | `open-login-items-settings` | renderer -> main | Opens System Settings → Login Items |
 | `set-enable-notifications` | renderer -> main | Threshold and reset notifications |
+| `set-theme` | renderer -> main | `system`, `light`, or `dark`. Stores it and sets `nativeTheme.themeSource` |
 | `set-language` | renderer -> main | `en` or `fr`. Closes the popup, refreshes the tray, broadcasts `language-changed` |
 | `get-last-error` | renderer -> main | Last quota error |
 | `check-for-updates` | renderer -> main | Update check |
@@ -264,6 +265,7 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
   launchAtLogin: boolean        // default false; packaged builds sync it from Login Items at startup
   enableNotifications: boolean  // default true
   language: 'en' | 'fr'         // default 'en'
+  theme: 'system' | 'light' | 'dark' // default 'system', applied to nativeTheme.themeSource at startup
   displayMode: 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
   rateLimitedUntil: number      // internal
   lastQuotaData: object | null  // internal, restored if younger than 24 h
@@ -273,7 +275,7 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
 }
 ```
 
-The renderer `Settings` type is `refreshInterval`, `launchAtLogin`, optional `launchAtLoginStatus` (`not-registered` | `enabled` | `requires-approval` | `not-found`), `enableNotifications`, and `language`. `launchAtLoginStatus` is read from the system on packaged builds and is not stored.
+The renderer `Settings` type is `refreshInterval`, `launchAtLogin`, optional `launchAtLoginStatus` (`not-registered` | `enabled` | `requires-approval` | `not-found`), `enableNotifications`, `language`, and `theme`. `launchAtLoginStatus` is read from the system on packaged builds and is not stored.
 
 `displayMode: 'minimal'` is the Icon only menu item.
 

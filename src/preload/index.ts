@@ -8,6 +8,7 @@ export interface Settings {
   launchAtLoginStatus?: 'not-registered' | 'enabled' | 'requires-approval' | 'not-found'
   enableNotifications: boolean
   language: 'en' | 'fr'
+  theme: 'system' | 'light' | 'dark'
 }
 
 export interface UserInfo {
@@ -48,6 +49,8 @@ const api = {
   openLoginItemsSettings: (): Promise<boolean> => ipcRenderer.invoke('open-login-items-settings'),
   setEnableNotifications: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('set-enable-notifications', enabled),
+  setTheme: (theme: 'system' | 'light' | 'dark'): Promise<boolean> =>
+    ipcRenderer.invoke('set-theme', theme),
   setLanguage: (lang: string): Promise<boolean> =>
     ipcRenderer.invoke('set-language', lang),
   onLanguageChanged: (callback: (lang: 'en' | 'fr') => void): (() => void) => {

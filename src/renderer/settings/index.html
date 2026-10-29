@@ -43,6 +43,14 @@
             </select>
           </div>
           <div class="row">
+            <span class="row-label" id="themeLabel" data-i18n="settings.theme">Appearance</span>
+            <div class="segmented" id="theme" role="radiogroup" aria-labelledby="themeLabel">
+              <button role="radio" data-value="system" data-i18n="settings.themeSystem">Auto</button>
+              <button role="radio" data-value="light" data-i18n="settings.themeLight">Light</button>
+              <button role="radio" data-value="dark" data-i18n="settings.themeDark">Dark</button>
+            </div>
+          </div>
+          <div class="row">
             <span class="row-label" id="refreshLabel" data-i18n="settings.refreshShort">Refresh every</span>
             <div class="segmented" id="refreshInterval" role="radiogroup" aria-labelledby="refreshLabel">
               <button role="radio" data-value="300">5 min</button>

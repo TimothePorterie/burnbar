@@ -102,6 +102,14 @@ refreshAccountBtn.addEventListener('click', async () => {
   refreshAccountBtn.disabled = false
 })
 
+const selectTheme = segmented(document.getElementById('theme')!, async (value) => {
+  try {
+    await window.claudeBar.setTheme(value as 'system' | 'light' | 'dark')
+  } catch (error) {
+    console.error('Failed to update theme:', error)
+  }
+})
+
 const selectRefreshInterval = segmented(document.getElementById('refreshInterval')!, async (value) => {
   try {
     await window.claudeBar.setRefreshInterval(parseInt(value, 10))
@@ -245,6 +253,7 @@ window.claudeBar.onLanguageChanged(applyLocale)
 async function init(): Promise<void> {
   const settings = await window.claudeBar.getSettings()
   selectRefreshInterval(settings.refreshInterval.toString())
+  selectTheme(settings.theme)
   enableNotifications.checked = settings.enableNotifications
   launchAtLogin.checked = settings.launchAtLogin
   loginItemHint.hidden = settings.launchAtLoginStatus !== 'requires-approval'

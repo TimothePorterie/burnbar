@@ -21,6 +21,7 @@ interface SettingsStoreSchema {
   launchAtLogin: boolean
   enableNotifications: boolean
   language: 'en' | 'fr'
+  theme: 'system' | 'light' | 'dark'
   rateLimitedUntil: number
   lastQuotaData: PersistedQuotaData | null
   displayMode: string
@@ -38,6 +39,7 @@ export const settingsStore = new Store<SettingsStoreSchema>({
     launchAtLogin: false,
     enableNotifications: true,
     language: 'en' as const,
+    theme: 'system' as const,
     rateLimitedUntil: 0,
     lastQuotaData: null,
     displayMode: 'standard',

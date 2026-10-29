@@ -288,7 +288,7 @@ export class WindowManager {
 
     this.settingsWindow = new BrowserWindow({
       width: 420,
-      height: 490,
+      height: 540,
       title: 'Claude Bar Settings',
       resizable: false,
       minimizable: true,

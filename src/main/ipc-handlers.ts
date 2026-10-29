@@ -1,4 +1,4 @@
-import { ipcMain, app, BrowserWindow, shell } from 'electron'
+import { ipcMain, app, BrowserWindow, shell, nativeTheme } from 'electron'
 import { keychainService } from './services/keychain'
 import { quotaService, QuotaInfo } from './services/quota-api'
 import { schedulerService } from './services/scheduler'
@@ -22,6 +22,11 @@ function isValidBoolean(value: unknown): value is boolean {
 }
 
 const VALID_LANGUAGES = ['en', 'fr'] as const
+const VALID_THEMES = ['system', 'light', 'dark'] as const
+
+function isValidTheme(value: unknown): value is 'system' | 'light' | 'dark' {
+  return typeof value === 'string' && VALID_THEMES.includes(value as 'system' | 'light' | 'dark')
+}
 
 function isValidLanguage(value: unknown): value is Locale {
   return typeof value === 'string' && VALID_LANGUAGES.includes(value as Locale)
@@ -104,7 +109,8 @@ export function setupIpcHandlers(): void {
         launchAtLogin: store.get('launchAtLogin'),
         launchAtLoginStatus: loginItemStatus(),
         enableNotifications: store.get('enableNotifications'),
-        language: store.get('language')
+        language: store.get('language'),
+        theme: store.get('theme')
       }
     } catch (error) {
       logger.error('IPC get-settings error:', error)
@@ -112,7 +118,8 @@ export function setupIpcHandlers(): void {
         refreshInterval: 300,
         launchAtLogin: false,
         enableNotifications: true,
-        language: 'en'
+        language: 'en',
+        theme: 'system'
       }
     }
   })
@@ -180,6 +187,18 @@ export function setupIpcHandlers(): void {
       logger.error('IPC set-enable-notifications error:', error)
       return false
     }
+  })
+
+  // themeSource drives prefers-color-scheme in every window and the native vibrancy appearance
+  ipcMain.handle('set-theme', (_event, theme: unknown) => {
+    if (!isValidTheme(theme)) {
+      logger.warn(`Invalid theme rejected: ${theme}`)
+      return false
+    }
+    store.set('theme', theme)
+    nativeTheme.themeSource = theme
+    logger.info(`Theme set to '${theme}'`)
+    return true
   })
 
   ipcMain.handle('set-language', (_event, lang: unknown) => {
@@ -286,6 +305,9 @@ export function loadSettings(): void {
       const { openAtLogin, status } = app.getLoginItemSettings()
       store.set('launchAtLogin', openAtLogin || status === 'requires-approval')
     }
+
+    const theme = store.get('theme')
+    nativeTheme.themeSource = isValidTheme(theme) ? theme : 'system'
 
     const language = store.get('language')
     if (isValidLanguage(language)) {
