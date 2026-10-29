@@ -29,9 +29,11 @@
 - **Detailed Popup** — Session (5h) and weekly (7d) quotas. Per-model weekly quotas (Opus, Sonnet, Haiku, Fable) when the API sends them, plus overage when your plan reports it.
 - **Forecast** — On the session and weekly cards: a pace badge, the reset as `Reset in 2h 11m · 12:12` (a weekday on the weekly card), and `Runs out around … before reset` when the quota would hit 100% before the window ends.
 - **Levels** — Under 70% is normal. From 70% the popup says **High**; from 90% it says **Critical**. These levels are not configurable. Each model uses the same thresholds.
-- **Auto Refresh** — 5, 10, or 15 minutes
+- **Auto Refresh** — 5, 10, or 15 minutes. Scheduled refreshes pause after 10 minutes idle or while the screen is locked, with a refresh once the last successful data is 30 minutes old. Unlocking requests fresh data through the normal throttle; manual refreshes remain available.
 - **Visual Feedback** — The refresh button spins while loading. If a refresh is throttled, a toast overlays the popup
 - **Tooltips** — Hover the menu bar icon for each quota, the time until it resets, and when the numbers were last updated
+- **Anthropic Status** — Relevant Claude Code, Claude API, and claude.ai disruptions appear in the popup and tooltip, with a link to details. The public status page is checked alongside quota refreshes, at most every 5 minutes; unavailable status stays silent.
+- **Remaining Quota** — Show remaining percentages in the menu bar, tooltip, and popup. Gauges, levels, and forecasts still show utilization.
 - **Keyboard** — In the popup: Esc closes, ⌘R refreshes, ⌘, opens Settings, ⌘Q quits. The footer has a Quit button.
 - **Light / Dark** — Follows macOS by default, or force Light or Dark in Settings (Appearance)
 - **Lightweight** — Runs quietly in the background with minimal resource usage
@@ -56,7 +58,8 @@ Each quota is a single meter. The fill is how much of the quota you have used. A
 ### Notifications
 - A system notification the first time a quota crosses 70%, and again at 90% (once per level, remembered across restarts). This includes each model quota.
 - When a session or weekly window resets, one notification if that window had reached 70% or more (`Session quota reset` / `Weekly quota reset`). The title is the message, with no app name in front.
-- The same Alerts switch covers both. Nothing is sent while the last fetch failed or the cached numbers are stale.
+- Extra-usage notifications when billing beyond the plan starts, then at 50% and 90% of a positive monthly limit. Each alert is remembered across restarts; a decrease in billed usage starts a new cycle. The first reading records the current state without notifying.
+- The same Alerts switch covers quota, reset, and extra-usage notifications. Nothing is sent while the last fetch failed or the cached numbers are stale.
 
 ### Auto-Updates
 - Automatic check on startup, then about every 6 hours. A check is skipped while a download is in progress or an update is already downloaded.
@@ -145,9 +148,10 @@ Access settings via right-click → Settings, or ⌘, from the popup. The window
 
 - **Account**: connected or not, from the Keychain. Email or name, and the plan when present. A hint to run `claude`. **Refresh** re-reads that status.
 - **Appearance**: Auto (follows macOS), Light, or Dark
+- **Show remaining**: Display `58% left` instead of `42%` used. Off by default; also available as a checkbox in the menu bar context menu.
 - **Language**: English or French
-- **Refresh every**: 5, 10, or 15 minutes
-- **Alerts**: System notifications at 70% and 90%, and the reset notification
+- **Refresh every**: 5, 10, or 15 minutes, with automatic inactivity and screen-lock adaptation
+- **Alerts**: System notifications at 70% and 90%, quota resets, and extra-usage start and limit crossings
 - **Open at login**. If macOS still needs approval, a hint and a button open System Settings → General → Login Items.
 - **Updates**: Check, download, and install with one click
 
@@ -229,11 +233,17 @@ npm run test:coverage  # Run tests with coverage report
 
 ### "Claude Code is not connected"
 
-Run `claude` in a terminal and sign in, then click **Retry** in the popup. If macOS asks for Keychain access, choose **Always Allow**.
+Run `claude` in a terminal and sign in, then click **Retry** in the popup. The same fix applies when the popup says the saved session can't be read, the token expired, or Anthropic refused the session.
+
+### "Keychain access was denied" or "Couldn't read the Keychain"
+
+Click **Retry**. When macOS asks whether Claude Bar may read `Claude Code-credentials`, choose **Always Allow**. If no prompt appears, unlock the login Keychain in Keychain Access. Claude Bar only reads that item and never changes it.
 
 ### Quota not updating
 
-Right-click the menu bar icon and choose **Refresh**. A manual refresh is ignored if the last one was less than 15 seconds ago. If it still fails, check the network connection.
+The popup footer shows how old the data is ("Updated 25m ago"), in orange when it is outdated or the last refresh failed. The alert above the quotas says why (offline, Anthropic rate limit, server error) and when the next automatic try is. Opening the popup also retries.
+
+To retry now, click **Retry**, press ⌘R, or right-click the menu bar icon and choose **Refresh**. A manual refresh is ignored if the last one was less than 15 seconds ago, and during an Anthropic rate limit (at least 2 minutes).
 
 ### "Cannot open application" on an unsigned build
 

@@ -32,7 +32,8 @@ Main Process (Electron)
     ├── keychain.ts       # READ-ONLY read of Claude Code's Keychain item
     ├── token-utils.ts    # Token redaction for logs
     ├── quota-api.ts      # Usage API, cache, account-change reset, throttling
-    ├── quota-errors.ts   # HTTP / network error classification
+    ├── quota-errors.ts   # HTTP / network / Keychain error classification (i18n keys)
+    ├── status.ts         # Filtered public Anthropic status, main-process cache
     ├── settings-store.ts # Shared electron-store singleton
     ├── scheduler.ts      # Auto-refresh timer with error backoff
     ├── notifications.ts  # Threshold and reset notifications
@@ -55,11 +56,13 @@ Renderer
 Tests
 └── tests/                # Vitest: real modules, mocked electron / Keychain / store
     ├── forecast.test.ts
+    ├── keychain.test.ts
     ├── notifications.test.ts
     ├── popup-shortcuts.test.ts
     ├── quota-api.test.ts
     ├── quota-errors.test.ts
     ├── quota-level.test.ts
+    ├── scheduler.test.ts
     ├── settings-store.test.ts
     ├── token-utils.test.ts
     ├── tray-icon.test.ts
@@ -91,27 +94,32 @@ Tests
 ### Core
 - Credentials are the Keychain item `Claude Code-credentials` only. Claude Code must be installed and signed in (`claude`). There is no in-app OAuth login.
 - English / French UI.
-- Session (5 h) and weekly (7 d) quotas. `QuotaInfo.fiveHour` is optional: `five_hour: null` is valid. The popup reset line then says "No active session" and the tray title uses `—`. A present window with `resets_at: null` still has a period (`resetsIn` is `—`); the popup reset line is "No active session".
+- Session (5 h) and weekly (7 d) quotas. `QuotaInfo.fiveHour` is optional: `five_hour: null` is valid. The popup reset line then says "No active session" and the tray title uses `—`. A present window with `resets_at: null` still has a period (`resetsIn` is `—`); the popup reset line is "No active session". Utilization is clamped to 0–100% (`buildPeriod`).
 - `models: ModelQuota[]` is built from the whitelist `MODEL_FAMILIES` (`opus`, `sonnet`, `haiku`, `fable`) and the keys `seven_day_<family>`. Other windows (`seven_day_oauth_apps`, `seven_day_routines`, `seven_day_cowork`, and anything else) are ignored. Optional `extra_usage` overage when `is_enabled`.
 - A persisted `sevenDayOpus` with no `models` array is restored as one Opus model (`key: seven_day_opus`). The next successful save writes `models` and drops `sevenDayOpus`.
 - Menu bar icon: template image from `renderGaugeBitmap` (18×18 at 1x, 36×36 at 2x). The thick bar is the session utilization, the thin bar is the weekly utilization. A missing value draws an empty track. No level PNG. `Tray` is created with the fixed GUID `18f3a40d-d04b-4b87-972e-79bd0432eed3` so macOS can remember the item position.
 - Stale data, or an error other than a `rate_limit` that still has cached quota, draws the icon at 35% alpha. The title has no `⚠` prefix. `setTitle` uses `{ fontType: 'monospacedDigit' }`. With no cached quota the title is empty.
 - If the tray item reports `getBounds().width === 0` (hidden item), the popup opens at the top right of the primary display's work area. A visible item centers the popup under the icon, on that display.
 - Auto-refresh: 5, 10, or 15 min (`300` / `600` / `900` seconds). Default 300. Any other stored value is rewritten to 300 (values under 120 s as soon as the store loads, the rest when settings load).
+- Adaptive refresh skips scheduled ticks after 10 min of system inactivity or while the screen is locked, until the last successful quota is 30 min old (`IDLE_REFRESH_MAX_AGE_MS`). The configured interval is never shortened. While ticks are skipped the scheduler sets `quotaService.idlePaused`, so the data is not flagged stale before 30 min + one interval. Unlocking, `user-did-become-active` (macOS session switch), and every popup open request a non-forced refresh through the existing throttle; manual and forced refreshes always run. The scheduler logs the first skipped tick and the next refresh.
 - Launch at login. Packaged builds sync the switch from Login Items at startup (`openAtLogin`, or on when `status === 'requires-approval'`). That status shows a hint and a button. The button sends `open-login-items-settings`, which opens `x-apple.systempreferences:com.apple.LoginItems-Settings.extension`. In development the status is omitted and the hint stays hidden.
-- Refresh button spins while a refresh runs (at least 400 ms). A toast overlays the popup for 2 s only when the refresh was throttled. It does not change the window height.
+- Refresh button spins while a refresh runs (at least 400 ms). A toast overlays the popup for 2 s only when the refresh was throttled and the cached data carries no error (a throttled refresh during an error is explained by the alert). It does not change the window height.
 - Popup height follows content (`popup-content-height`).
 - Popup shortcuts, on `before-input-event` (keydown, ⌘ without alt, control, or shift): Esc hides, ⌘R force-refreshes, ⌘, opens Settings, ⌘Q quits. The footer Quit button calls `quit-app`.
-- Signed-out popup: heading "Claude Code is not connected", the hint to run `claude` (backticks rendered as `<code>`), and Retry. The same view is used when an auth error arrives and nothing is cached. Backticks in error text and in the Settings account hint are also `<code>`.
+- Signed-out popup: heading "Claude Code is not connected", the hint to run `claude` (backticks rendered as `<code>`), and Retry. The same view is used when an auth error arrives and nothing is cached; the hint is then that error's message (unreadable session, expired token, 403). Backticks in error text and in the Settings account hint are also `<code>`. The header has no placeholder text: it shows the account name once user info loads (not read for a `keychain` error).
 - A second launch (`second-instance`) opens Settings.
-- `lastAccount` stores `accountUuid`, or `emailAddress` when there is no uuid. `getCredentials` calls `resetForAccountChange()` when a stored value differs. That drops the in-memory cache, `lastQuotaData`, `notifiedLevels`, `resetNotifications`, and the last error, and bumps a generation counter so a response still in flight is discarded. The fetch that noticed the change then continues. The popup reloads user info on every `quota-updated`. Settings reloads the account block and the login-item hint on focus. Account Refresh re-reads the Keychain status only. It does not fetch quotas.
+- `lastAccount` stores `accountUuid`, or `emailAddress` when there is no uuid. `getCredentials` calls `resetForAccountChange()` when a stored value differs. That drops the in-memory cache, `lastQuotaData`, `notifiedLevels`, `resetNotifications`, `extraUsageNotified`, and the last error, and bumps a generation counter so a response still in flight is discarded. The fetch that noticed the change then continues. The popup reloads user info on every `quota-updated`. Settings reloads the account block and the login-item hint on focus. The account block is "Connected" only when the Keychain item exists, its credentials are readable, and the last error is not `auth` or `keychain`; otherwise it is "Not Connected" with that error's message (or the unreadable-session message). On focus and on Account Refresh, a current `auth` / `keychain` error triggers `refresh-quota` first, so a fixed session shows as connected; otherwise only the Keychain status is re-read.
 
 ### Display Modes (right-click menu)
+`showRemaining` (default false) switches displayed percentages to rounded `100 - utilization` in Standard, Detailed, Compact, tooltips, and every popup quota row. The setting is available in General and as a tray checkbox. Changing it closes the popup, refreshes the tray, and broadcasts `show-remaining-changed` to keep Settings synchronized. Missing sessions stay `—` in remaining mode. Gauges, levels, colors, forecasts, and the Time Remaining / Icon only titles retain their existing meaning.
+
 Persisted in `displayMode`.
 - **Standard**: `45% / 32%` (session `—` when `fiveHour` is absent)
 - **Detailed**: `5h: 45% | 7d: 32%`, then each model as `| Opus: 10%` in whitelist order
 - **Compact**: session percentage, or `—`
-- **Time Remaining**: session `resetsIn`, or `—` (title refreshes every minute in this mode only)
+- **Time Remaining**: session `resetsIn`, or `—`
+
+Title, icon, and tooltip are redrawn every minute in every mode, so countdowns, the data age, and the stale dim move without a fetch.
 - **Icon only**: empty title. The menu label is "Icon only". The stored value stays `minimal`.
 
 ### Gauge
@@ -129,6 +137,8 @@ Same 70 / 90 thresholds, per session, per weekly window, and per model. One noti
 
 Session and weekly only: when the stored `resetNotifications` time for that window has passed and the max utilization recorded for that `resetsAt` was >= 70%, one notification — "Session quota reset" or "Weekly quota reset", body "You can resume." The same Alerts switch (`enableNotifications`) gates both. `checkAndNotify` returns immediately when there is no quota, an error, or `stale`. On that check, a legacy `notifiedLevels.sevenDayOpus` value is applied to `seven_day_opus` and the old key is deleted.
 
+Extra usage uses the same Alerts switch: a notification when billed credits first become positive, then once at 50% and 90% of a positive monthly limit. Amounts are converted from cents and formatted with the current locale and reported currency, falling back to a decimal amount and currency code if invalid. `extraUsageNotified` stores the last amount and notified levels across restarts; a decrease in credits starts a new cycle. The first valid reading records reached levels without notifying. Missing or disabled extra usage is ignored, as are errors and stale quota data.
+
 ### Design (« Terre sur verre »)
 Tokens live in `src/renderer/shared/tokens.css` (light, and dark via `prefers-color-scheme`). Surfaces are translucent; the windows use native vibrancy (`popover` on the popup, `window` on settings).
 
@@ -144,15 +154,21 @@ Accessibility: meters and the update bar are `role="progressbar"` with `aria-val
 - An account change calls `resetForAccountChange()` as described under Core.
 
 ### Error Handling
-- One retry on 401: Keychain re-read. A still-failing 401 is an auth error (`error.cliTokenExpired`).
+- Errors are stored as an i18n key (`QuotaErrorState` in `quota-errors.ts`) and translated by `getLastError()`, so a language change also applies to the current error. Every message says what happens and what to do.
+- Keychain read (`security find-generic-password`, 60 s timeout): `KeychainService.lastFailure` is `missing` (exit 44) → auth `error.noCredentials`; `invalid` (empty, not JSON, no or malformed token) → auth `error.credentialsInvalid`; `denied` (exit 128 or 51) → `keychain` `error.keychainDenied`; `failed` (any other exit, timeout, locked Keychain) → `keychain` `error.keychainFailed`. The two `keychain` errors are retryable (backoff spaces out the macOS prompts). An expired token is auth `error.cliTokenExpired`, without an API call.
+- One retry on 401: Keychain re-read. A still-failing 401 is an auth error (`error.cliTokenExpired`). 403 is auth `error.forbidden`. Other 4xx and a body that is not JSON or has an unexpected shape are `unknown` `error.unexpectedResponse`. 5xx is `server`. A rejected fetch is `network` (`error.network`, or `error.timeout` for the 15 s timeout).
 - 429: cooldown from `retry-after`, floor 2 min, cap 1 h, persisted in `rateLimitedUntil`. No token rotation.
 - Proactive pause when `anthropic-ratelimit-requests-remaining` is 0, until the reset header (+ 5 s).
-- `getCachedQuota()` attaches the last error. The menu bar icon is drawn at 35% alpha when data is stale, or when there is an error that is not a `rate_limit` still backed by cached quota. The tooltip adds the error message (not for `rate_limit` while cached quota is shown) and, when `stale` is set, the stale line. The popup alert is that error, and it is not shown for stale data alone or for a `rate_limit` that still has cached quota. An auth error with nothing cached shows the signed-out view instead of the alert. Any other error with nothing cached shows the alert plus guidance.
-- `QuotaInfo.stale` is true when `lastUpdated` is older than twice `refreshInterval`.
-- A period whose `resetsAt` is already past is shown at 0% until the next fetch (`buildPeriod`).
-- Scheduler: exponential backoff on retryable errors, multiplier capped at 8× the interval. `stop()` (including wake-from-sleep) clears retry timers and the error count.
-- Throttle: scheduled fetches need ~5 min since the last success (290 s). Manual refresh floor is 15 s.
-- Error types: `network`, `auth`, `rate_limit`, `server`, `unknown`.
+- `QuotaError.retryAt` is the next automatic attempt: the later of the scheduler's backoff or rate-limit timer (`quotaService.nextRetryAt`) and `rateLimitedUntil`, when in the future. It is shown as "Next try in {time}." (or "under a minute") in the popup alert and the tooltip.
+- `getCachedQuota()` attaches the last error. The menu bar icon is drawn at 35% alpha when data is stale, or when there is an error that is not a `rate_limit` still backed by cached quota. The tooltip adds the error message (backticks removed), the next try, and, when `stale` is set, the stale line. With cached quota, the popup alert shows any error, including `rate_limit`, with the next try; the data stays on screen. An auth error with nothing cached shows the signed-out view instead of the alert. Any other error with nothing cached shows the alert plus guidance (`network`, `server`) and the next try.
+- The popup footer is the data age ("Updated just now", "Updated 25m ago", exact time on hover), in the warning color when the data is stale or the last refresh failed.
+- `QuotaInfo.stale` is true when `lastUpdated` is older than twice `refreshInterval`, or 30 min + one interval while idle refreshes are paused.
+- A period whose `resetsAt` is already past has no active window until the next fetch: 0%, `resetsAt` invalid, `resetsIn` `—`, no pace tick (`buildPeriod`). The popup says "No active session".
+- A persisted `lastQuotaData` with an invalid weekly or session period is not restored; invalid model periods are dropped.
+- Scheduler: concurrent `refresh()` calls share one run. Exponential backoff on retryable errors, multiplier capped at 8× the interval. A refresh answered from the cache without a request (throttle) leaves the backoff and timers unchanged. `stop()` (including wake-from-sleep) clears retry timers and the error count.
+- Throttle: scheduled fetches need ~5 min since the last success (290 s). Manual refresh floor is 15 s. A clock set back (negative elapsed time) never throttles.
+- Opening the popup resends the cached quota, or the last error when nothing is cached, then requests a non-forced refresh.
+- Error types: `network`, `auth`, `keychain`, `rate_limit`, `server`, `unknown`.
 
 ### Auto-Updates
 - Packaged builds only. `autoDownload` is false. `autoInstallOnAppQuit` is true.
@@ -162,16 +178,17 @@ Accessibility: meters and the update bar are `role="progressbar"` with `aria-val
 - GitHub Releases (signed DMG + ZIP).
 
 ### Tooltips
+The main process fetches `https://status.claude.com/api/v2/summary.json` alongside quota refreshes, without delaying quotas, with a 10 s timeout and at most one attempt every 5 min. Only the components named `Claude Code`, `Claude API (api.anthropic.com)`, and `claude.ai` count. Relevant unresolved incidents or non-operational components set `QuotaInfo.status`; unrelated incidents and the global indicator are ignored. A disruption adds an Anthropic tooltip line and a popup banner under the header, warning for minor and critical-colored for major/critical. Details opens the incident URL, or the status page, through validated IPC. Network failures clear status to unknown and only log at debug level; no system notification is sent.
+
 - "No active session" when `fiveHour` is absent, otherwise the session percentage and time until reset. Weekly percentage and time until reset. Each model the same way.
-- Last updated time.
-- Last error message (except `rate_limit`) and `tray.stale` when `stale` is set.
-- With nothing cached: `Claude Bar —` plus the error message, or `tray.clickToView` when there is no error.
+- Data age ("Updated 25m ago").
+- Last error message (any type, backticks removed), the next try when scheduled, and `tray.stale` when `stale` is set.
+- With nothing cached: `Claude Bar —` plus the error message and the next try, or `tray.clickToView` when there is no error.
 
 ## Not Yet Implemented
 
 - History service (`history.ts`): no usage history, charts, or statistics.
 - Trend arrows.
-- Adaptive refresh.
 - Pause mode.
 - Time-to-critical estimate (the forecast projects 100%, not 70% or 90%).
 - Configurable thresholds (70 / 90 are constants in `src/shared/quota.ts`. The Alerts subtitle in Settings still says 70% and 90%).
@@ -232,18 +249,21 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|
-| `get-quota` | renderer -> main | Cached quota |
+| `get-quota` | renderer -> main | Cached quota, including optional filtered Anthropic `status` |
 | `refresh-quota` | renderer -> main | Force refresh. Returns `{ quota, throttled, retryIn }` |
 | `has-credentials` | renderer -> main | Keychain item `Claude Code-credentials` exists |
 | `get-user-info` | renderer -> main | Email, display name, subscription type from that item |
-| `get-settings` | renderer -> main | `refreshInterval`, `launchAtLogin`, `launchAtLoginStatus` (packaged only), `enableNotifications`, `language`, `theme` |
+| `get-settings` | renderer -> main | `refreshInterval`, `launchAtLogin`, `launchAtLoginStatus` (packaged only), `enableNotifications`, `showRemaining`, `language`, `theme` |
 | `set-refresh-interval` | renderer -> main | 300, 600, or 900 |
 | `set-launch-at-login` | renderer -> main | Stores the flag. Packaged builds also call `setLoginItemSettings` |
 | `open-login-items-settings` | renderer -> main | Opens System Settings → Login Items |
-| `set-enable-notifications` | renderer -> main | Threshold and reset notifications |
+| `set-enable-notifications` | renderer -> main | Threshold, reset, and extra-usage notifications |
+| `set-show-remaining` | renderer -> main | Boolean; updates remaining percentages, refreshes tray, closes popup |
+| `open-status-page` | renderer -> main | Opens only URLs starting with `https://status.claude.com/` or `https://status.anthropic.com/` |
+| `show-remaining-changed` | main -> renderer | Boolean preference broadcast; preload `onShowRemainingChanged` |
 | `set-theme` | renderer -> main | `system`, `light`, or `dark`. Stores it and sets `nativeTheme.themeSource` |
 | `set-language` | renderer -> main | `en` or `fr`. Closes the popup, refreshes the tray, broadcasts `language-changed` |
-| `get-last-error` | renderer -> main | Last quota error |
+| `get-last-error` | renderer -> main | Last quota error, translated, with `retryAt` when a retry is scheduled |
 | `check-for-updates` | renderer -> main | Update check |
 | `download-update` | renderer -> main | Download |
 | `install-update` | renderer -> main | Install and restart |
@@ -264,6 +284,7 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
   refreshInterval: number       // 300 | 600 | 900, default 300
   launchAtLogin: boolean        // default false; packaged builds sync it from Login Items at startup
   enableNotifications: boolean  // default true
+  showRemaining: boolean        // default false; display remaining percentages
   language: 'en' | 'fr'         // default 'en'
   theme: 'system' | 'light' | 'dark' // default 'system', applied to nativeTheme.themeSource at startup
   displayMode: 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
@@ -271,11 +292,12 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
   lastQuotaData: object | null  // internal, restored if younger than 24 h
   notifiedLevels: object        // internal, per period: 'normal' | 'warning' | 'critical'
   resetNotifications: object    // internal, fiveHour / sevenDay: { resetsAt, utilization }
+  extraUsageNotified?: { used: number; levels: ('started' | '50' | '90')[] } // internal, absent until first reading
   lastAccount: string | null    // internal, accountUuid or emailAddress
 }
 ```
 
-The renderer `Settings` type is `refreshInterval`, `launchAtLogin`, optional `launchAtLoginStatus` (`not-registered` | `enabled` | `requires-approval` | `not-found`), `enableNotifications`, `language`, and `theme`. `launchAtLoginStatus` is read from the system on packaged builds and is not stored.
+The renderer `Settings` type is `refreshInterval`, `launchAtLogin`, optional `launchAtLoginStatus` (`not-registered` | `enabled` | `requires-approval` | `not-found`), `enableNotifications`, `showRemaining`, `language`, and `theme`. `launchAtLoginStatus` is read from the system on packaged builds and is not stored.
 
 `displayMode: 'minimal'` is the Icon only menu item.
 
