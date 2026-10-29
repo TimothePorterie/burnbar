@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <path id="squircle" d="M383.4 100H640.6C722.2 100 763 100 799.8 111.7C854.9 131.3 892.7 169.1 912.3 224.2C924 261 924 301.8 924 383.4V640.6C924 722.2 924 763 912.3 799.8C892.7 854.9 854.9 892.7 799.8 912.3C763 924 722.2 924 640.6 924H383.4C301.8 924 261 924 224.2 912.3C169.1 892.7 131.3 854.9 111.7 799.8C100 763 100 722.2 100 640.6V383.4C100 301.8 100 261 111.7 224.2C131.3 169.1 169.1 131.3 224.2 111.7C261 100 301.8 100 383.4 100Z"/>
+    <clipPath id="clip"><use href="#squircle"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4E2417"/>
+      <stop offset=".55" stop-color="#2A130D"/>
+      <stop offset="1" stop-color="#130907"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="596" cy="500" r="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F07A45" stop-opacity=".5"/>
+      <stop offset=".5" stop-color="#C2482A" stop-opacity=".14"/>
+      <stop offset="1" stop-color="#C2482A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".1"/>
+      <stop offset=".45" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".28"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity=".06"/>
+      <stop offset="1" stop-color="#fff" stop-opacity=".12"/>
+    </linearGradient>
+    <linearGradient id="burn" x1="6" y1="46" x2="42" y2="10" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B23F1E"/>
+      <stop offset=".45" stop-color="#E26A40"/>
+      <stop offset=".78" stop-color="#FFA466"/>
+      <stop offset="1" stop-color="#FFD9A3"/>
+    </linearGradient>
+    <linearGradient id="coal" x1="6" y1="0" x2="30" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#B23F1E"/>
+      <stop offset="1" stop-color="#F58450"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFC27A"/>
+      <stop offset="1" stop-color="#FFF4DE"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="1.6"/>
+    </filter>
+  </defs>
+  <use href="#squircle" fill="#000" fill-opacity=".35" transform="translate(0 12)" filter="url(#shadow)"/>
+  <g clip-path="url(#clip)">
+    <rect width="1024" height="1024" fill="url(#bg)"/>
+    <rect width="1024" height="1024" fill="url(#glow)"/>
+    <rect width="1024" height="1024" fill="url(#sheen)"/>
+  </g>
+  <use href="#squircle" fill="none" stroke="url(#rim)" stroke-width="4" clip-path="url(#clip)"/>
+  <g transform="translate(176 180) scale(10.5)">
+    <rect x="6" y="36" width="52" height="10" rx="5" fill="#FFE6D6" fill-opacity=".14"/>
+    <rect x="6" y="50" width="52" height="5" rx="2.5" fill="#FFE6D6" fill-opacity=".14"/>
+    <path d="M11 36H23C29 36 32 33 33.8 27.5C35.6 22 37.5 15.5 42 9C44 15.5 46.5 21.5 46.5 30C46.5 39.5 41.5 46 34.5 46H11A5 5 0 0 1 11 36Z" fill="#FF7A3D" opacity=".55" filter="url(#soft)"/>
+    <rect x="6" y="50" width="24" height="5" rx="2.5" fill="url(#coal)"/>
+    <path d="M11 36H23C29 36 32 33 33.8 27.5C35.6 22 37.5 15.5 42 9C44 15.5 46.5 21.5 46.5 30C46.5 39.5 41.5 46 34.5 46H11A5 5 0 0 1 11 36Z" fill="url(#burn)"/>
+    <path d="M34.2 42.6C32.4 39.2 33.6 31.5 39 25.5C40.6 30.5 43 33.4 42.6 37.8C42.2 41.6 37.8 43.6 34.2 42.6Z" fill="url(#core)"/>
+  </g>
+</svg>
