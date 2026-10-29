@@ -1,274 +1,180 @@
-# Claude Bar
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey" alt="Platform: macOS 13+">
-  <img src="https://img.shields.io/badge/electron-45-blue" alt="Electron 45">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-readme-dark.svg">
+  <img src="assets/logo-readme-light.svg" alt="BurnBar" width="360">
+</picture>
+
+<p><strong>Your AI coding quotas, in the macOS menu bar.</strong><br>
+Claude Code and Codex limits with a forecast, Grok and OpenCode spend, at a glance.</p>
+
+<p>
+  <a href="https://github.com/TimothePorterie/burnbar/releases/latest"><img src="https://img.shields.io/github/v/release/TimothePorterie/burnbar?label=release&color=D97757" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-13%2B-555?logo=apple&logoColor=white" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/Electron-45-555?logo=electron&logoColor=white" alt="Electron 45">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-555" alt="License: MIT"></a>
+  <a href="https://github.com/TimothePorterie/burnbar/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/TimothePorterie/burnbar/ci.yml?branch=main&label=CI" alt="CI"></a>
 </p>
 
-<p align="center">
-  <strong>Monitor your Claude Code quotas directly from the macOS menu bar.</strong>
-</p>
+<img src="assets/readme/popup.png" alt="BurnBar popup in light and dark mode: Claude Code and Codex session and weekly quotas with reset times and pace, Opus and Sonnet weekly quotas, and Grok and OpenCode spend" width="880">
 
-<!-- Screenshot is out of date. The current popup uses the shared light/dark tokens,
-     one meter per quota with an elapsed-time tick, High/Critical labels, a pace
-     badge and a "runs out" line on the session and weekly cards, and compact
-     per-model rows when the API sends them. There is no in-app login. It does
-     not show trend arrows, a statistics block, a separate reset bar, or pause.
-     Leave this file in place until a new capture is taken on a Mac. -->
-<p align="center">
-  <img src="assets/screenshot.png" alt="Claude Bar Screenshot" width="400">
-</p>
+</div>
 
----
+## Why BurnBar
+
+Coding agents stop when a quota runs out, and each tool hides its numbers in a different place. BurnBar puts them in one menu bar item:
+
+- How much of the 5-hour session and the weekly window you have used, for Claude Code and Codex.
+- When each window resets, and whether your current pace runs out before that.
+- What Grok and OpenCode cost you today and over the last 7 days.
+
+It reads what the official tools already know. It has no account, no login, and no server of its own.
+
+BurnBar is an independent project. It is not affiliated with Anthropic, OpenAI, xAI, or OpenCode.
 
 ## Features
 
-### Core
-- **Menu Bar Gauge** — A template icon drawn in the app: a thick bar for the 5-hour session, a thin bar for the weekly quota. The title uses monospaced digits. With nothing cached, the title is empty.
-- **Detailed Popup** — Session (5h) and weekly (7d) quotas. Per-model weekly quotas (Opus, Sonnet, Haiku, Fable) when the API sends them, plus overage when your plan reports it.
-- **Forecast** — On the session and weekly cards: a pace badge, the reset as `Reset in 2h 11m · 12:12` (a weekday on the weekly card), and `Runs out around … before reset` when the quota would hit 100% before the window ends.
-- **Levels** — Under 70% is normal. From 70% the popup says **High**; from 90% it says **Critical**. These levels are not configurable. Each model uses the same thresholds.
-- **Auto Refresh** — 5, 10, or 15 minutes. Scheduled refreshes pause after 10 minutes idle or while the screen is locked, with a refresh once the last successful data is 30 minutes old. Unlocking requests fresh data through the normal throttle; manual refreshes remain available.
-- **Visual Feedback** — The refresh button spins while loading. If a refresh is throttled, a toast overlays the popup
-- **Tooltips** — Hover the menu bar icon for each quota, the time until it resets, and when the numbers were last updated
-- **Anthropic Status** — Relevant Claude Code, Claude API, and claude.ai disruptions appear in the popup and tooltip, with a link to details. The public status page is checked alongside quota refreshes, at most every 5 minutes; unavailable status stays silent.
-- **Remaining Quota** — Show remaining percentages in the menu bar, tooltip, and popup. Gauges, levels, and forecasts still show utilization.
-- **Keyboard** — In the popup: Esc closes, ⌘R refreshes, ⌘, opens Settings, ⌘Q quits. The footer has a Quit button.
-- **Light / Dark** — Follows macOS by default, or force Light or Dark in Settings (Appearance)
-- **Lightweight** — Runs quietly in the background with minimal resource usage
-- **Native Feel** — Uses macOS vibrancy effects for a native look
-- **Languages** — English and French
+| Tool | What BurnBar shows | Where it comes from |
+|------|--------------------|---------------------|
+| **Claude Code** | Session (5 h) and weekly (7 d) quotas, per-model weekly quotas (Opus, Sonnet, Haiku, Fable) when present, extra usage beyond the plan, plan badge, Anthropic incidents | Claude Code's sign-in, read from the macOS Keychain, then Anthropic's usage endpoint and the public [status page](https://status.claude.com) |
+| **Codex** | Session and weekly quotas, plan badge, available limit resets, "usage limit reached" | The local `codex app-server` from the official Codex CLI |
+| **Grok** | Spend and tokens: today and last 7 days | `grok usage` from the official Grok CLI |
+| **OpenCode** | Spend and tokens: today and last 7 days | `opencode stats` from the official OpenCode CLI |
 
-Claude Bar does not log you in. [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance) (Authentication and credential use) forbid a third-party app from offering Claude.ai login or from collecting and storing Claude.ai tokens. Sign in with Claude Code. Claude Bar only reads that session.
+Grok and OpenCode expose no official limits, so BurnBar shows consumption only for them: no quota, forecast, or alert.
 
-### Display Modes
-Choose your preferred menu bar format (right-click → Display Mode):
-- **Standard**: `45% / 32%`
-- **Detailed**: `5h: 45% | 7d: 32%`, plus `| Opus: 10%` (and Sonnet, Haiku, or Fable) when that quota exists
-- **Compact**: `45%` (session usage)
-- **Time Remaining**: `4h 30m` (time until the session resets)
-- **Icon only**: icon only, no text (the stored value is still `minimal`)
+For every quota:
 
-With no active session window, the session slot in the title is `—`.
+- **One meter per window.** The fill is what you used. A tick marks how much of the window has elapsed, so a fill past the tick means you are ahead of the clock.
+- **Levels.** From 70% the popup says **High**, from 90% **Critical**. The thresholds are fixed.
+- **Reset and pace.** `Reset in 3h 9m · 3:30 PM`, then **High pace**, **On track**, or **Comfortable headroom**. When the current rate would reach 100% before the reset: `Runs out around 1:28 PM, 32m before reset`.
+- **Data age.** "Updated 5m ago". Stale data or a failed refresh turns it orange and dims the menu bar icon.
 
-### Gauge
-Each quota is a single meter. The fill is how much of the quota you have used. A tick on the same meter shows how far the current period has elapsed. A model row is the label, the meter, the percentage, and the level.
+The popup has one section per tool you turn on. Click a section header to fold it to a one-line summary; BurnBar remembers it.
 
-### Notifications
-- A system notification the first time a quota crosses 70%, and again at 90% (once per level, remembered across restarts). This includes each model quota.
-- When a session or weekly window resets, one notification if that window had reached 70% or more (`Session quota reset` / `Weekly quota reset`). The title is the message, with no app name in front.
-- Extra-usage notifications when billing beyond the plan starts, then at 50% and 90% of a positive monthly limit. Each alert is remembered across restarts; a decrease in billed usage starts a new cycle. The first reading records the current state without notifying.
-- The same Alerts switch covers quota, reset, and extra-usage notifications. Nothing is sent while the last fetch failed or the cached numbers are stale.
+## Menu bar
 
-### Auto-Updates
-- Automatic check on startup, then about every 6 hours. A check is skipped while a download is in progress or an update is already downloaded.
-- **Check for Updates** in Settings and in the menu bar menu. In Settings the check button is hidden while a download is in progress, while an update is available to download, and when an update is ready to install.
-- Background download with a progress bar
-- **Install & Restart** from Settings
+The icon is a small gauge: the thick bar is the session, the thin bar is the weekly window. Next to it, the title follows the display mode you pick with a right-click → **Display Mode**:
 
-## Requirements
+| Mode | Example |
+|------|---------|
+| Standard | `45% / 32%` (session / weekly) |
+| Detailed | `5h: 45% \| 7d: 32% \| Opus: 10%`, or `Claude 45% / 32% · Codex 22% / 12%` when both are on |
+| Compact | `45%` |
+| Time Remaining | `4h 30m` until the session resets |
+| Icon only | No text |
 
-- macOS 13.0 or later
-- Claude Code installed, and signed in with `claude`
+**Menu bar shows** in Settings picks the tool behind the icon and title: Claude, Codex, or Highest (each bar and the title follow the more loaded of the two). `—` means there is no active session window.
 
-## Installation
+**Show remaining** (Settings or the right-click menu) switches every percentage to what is left: `58% left` instead of `42%`. Meters, levels, and forecasts keep their meaning.
 
-### From DMG (Recommended)
+Hover the icon for a tooltip with each window, its reset time, the data age, and the last error. Left-click opens the popup. In the popup, Esc closes it, ⌘R refreshes, ⌘, opens Settings, and ⌘Q quits.
 
-1. Download the latest DMG from [Releases](https://github.com/TimothePorterie/claude-bar/releases):
-   - **Apple Silicon (M1/M2/M3):** `Claude Bar-x.x.x-arm64.dmg`
-   - **Intel:** `Claude Bar-x.x.x-x64.dmg`
-2. Open the DMG and drag **Claude Bar** to your Applications folder
-3. Launch Claude Bar from Applications
+## Notifications
 
-Release builds are signed and notarized. The Gatekeeper workaround below is only for an unsigned build you produced yourself.
+One switch, **Alerts**, covers all of them:
 
-### From Source
+- A quota crosses 70%, then 90%: once per level, for the Claude session, weekly, and model quotas, and for the Codex session and weekly quotas.
+- A session or weekly window resets after reaching 70% or more: "Session quota reset. You can resume."
+- Claude extra usage: when billing beyond your plan starts, then at 50% and 90% of your monthly limit.
 
-```bash
-# Clone the repository
-git clone https://github.com/TimothePorterie/claude-bar.git
-cd claude-bar
+Nothing is sent from stale data or after a failed refresh. Grok and OpenCode never notify.
 
-# Install dependencies
-npm install
+## Install
 
-# Run in development mode
-npm run dev
+1. Download the DMG for your Mac from the [latest release](https://github.com/TimothePorterie/burnbar/releases/latest): `arm64` for Apple silicon, `x64` for Intel.
+2. Open it and drag **BurnBar** to Applications.
+3. Open BurnBar. It lives in the menu bar and has no Dock icon.
 
-# Or build the DMG
-npm run dist
-```
+Releases are signed and notarized. Requires macOS 13 or later.
 
-## Setup
+On first launch BurnBar turns on each tool it finds: Claude Code when its Keychain item exists, the others when their command is installed. Change this later under **Settings → Providers**.
 
-1. Install [Claude Code](https://code.claude.com) and sign in:
-   ```bash
-   claude
-   ```
-2. Launch Claude Bar
-3. If macOS asks for Keychain access to `Claude Code-credentials`, choose **Always Allow**
+To read Claude Code's sign-in, macOS asks for access to the Keychain item `Claude Code-credentials`. Choose **Always Allow**, or the prompt comes back at every refresh.
 
-Claude Bar reads that item and does not refresh or replace it. If the token expires, run `claude` again so Claude Code can rotate it.
+## Setup per tool
 
-## Usage
+Each tool must be installed and signed in with its own CLI. BurnBar finds the commands in your login shell's `PATH`, Homebrew, `~/.local/bin`, `~/.bun/bin`, `~/.volta/bin`, and nvm's Node versions.
 
-| Action | Result |
-|--------|--------|
-| **Left-click** on menu bar icon | Opens or closes the quota popup |
-| **Right-click** on menu bar icon | Context menu (Refresh, Display Mode, Settings, Check for Updates, Quit) |
-| **Refresh** (popup button, ⌘R, or menu) | Fetches quota data, at most once every 15 seconds |
-| **Esc** | Closes the popup |
-| **⌘,** | Opens Settings |
-| **⌘Q** or **Quit** in the popup footer | Quits Claude Bar |
-| **Launch Claude Bar again** | Opens Settings (the app is already running) |
+**Claude Code.** Install [Claude Code](https://code.claude.com) and sign in by running `claude`. Switching accounts in Claude Code switches BurnBar too.
 
-### Menu Bar Display
+**Codex.** Install the [Codex CLI](https://github.com/openai/codex) and run `codex login`.
 
-In the standard display mode the menu bar shows two percentages:
-- **First number**: Session quota (5-hour window). `—` when there is no active session.
-- **Second number**: Weekly quota (7-day window)
+**Grok.** Install the official Grok CLI (`grok`) and use it as usual. BurnBar lists the sessions in `~/.grok/sessions/` and asks `grok usage` for those modified in the last 7 days. A session counts on the day it was last updated.
 
-The icon is dimmed when the cached numbers are stale, or when the last fetch failed for a reason other than a rate limit that still has data to show. Other formats are listed under Display Modes.
+**OpenCode.** Install [OpenCode](https://opencode.ai). BurnBar runs `opencode stats --standalone`, so no OpenCode server is left running.
 
-### Quota Levels
+Claude Code and Codex refresh every 5, 10, or 15 minutes. Grok and OpenCode refresh at most every 15 minutes.
 
-| Usage | Meaning |
-|-------|---------|
-| Below 70% | Normal |
-| 70% or more | High |
-| 90% or more | Critical |
+## Privacy and security
 
-Thresholds are fixed.
+- **Read-only.** BurnBar reads Claude Code's Keychain item and never writes, refreshes, or copies it. Claude Code owns its sign-in.
+- **No tokens for the other tools.** BurnBar never opens `~/.codex/auth.json` or any Grok or OpenCode credential. It runs their official CLIs and reads the numbers they print. For Grok it reads only session folder names and modification times.
+- **Official tools only.** No scraping, no undocumented endpoint called with your token. Each CLI call has a timeout and its process is stopped afterwards.
+- **No in-app login.** [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance) (Authentication and credential use) do not allow a third-party app to offer Claude.ai login or to collect and store Claude.ai tokens. BurnBar does neither: you sign in with Claude Code.
+- **Network.** BurnBar itself connects to `api.anthropic.com` (usage), `status.claude.com` (incidents), and GitHub (updates). No analytics. The CLIs it runs talk to their own services as they always do.
+- **Hardened app.** Sandboxed renderers with context isolation, a strict Content Security Policy, and Electron fuses that block Node options and debugging flags.
 
-### Settings
+## Settings
 
-Access settings via right-click → Settings, or ⌘, from the popup. The window is grouped into Account, General, and Updates:
+Right-click the icon → **Settings…**, or ⌘, in the popup.
 
-- **Account**: connected or not, from the Keychain. Email or name, and the plan when present. A hint to run `claude`. **Refresh** re-reads that status.
-- **Appearance**: Auto (follows macOS), Light, or Dark
-- **Show remaining**: Display `58% left` instead of `42%` used. Off by default; also available as a checkbox in the menu bar context menu.
-- **Language**: English or French
-- **Refresh every**: 5, 10, or 15 minutes, with automatic inactivity and screen-lock adaptation
-- **Alerts**: System notifications at 70% and 90%, quota resets, and extra-usage start and limit crossings
-- **Open at login**. If macOS still needs approval, a hint and a button open System Settings → General → Login Items.
-- **Updates**: Check, download, and install with one click
+- **Account**: Claude Code's connection, account, and plan. **Refresh** reads it again.
+- **Providers**: one switch per tool with its status (Connected, Installed, Not installed, Not connected), and **Menu bar shows**.
+- **General**: language (English, French), appearance (Auto, Light, Dark), refresh interval (5, 10, 15 min), Alerts, Open at login, Show remaining.
+- **Updates**: check, download, and **Install & Restart**. BurnBar also checks at launch and every 6 hours.
 
-## How It Works
-
-Claude Bar reads Claude Code's session from the macOS Keychain and periodically calls:
-
-```
-GET https://api.anthropic.com/api/oauth/usage
-```
-
-It never calls a token endpoint. Claude Code owns refresh. No API keys or manual configuration required.
-
-### Sleep and Wake
-
-- The first quota fetch waits about 2 seconds after launch so the network can come up
-- After the Mac wakes, monitoring restarts a couple of seconds later
-
-### Token Management
-
-| Source | Storage | Token refresh |
-|--------|---------|---------------|
-| **Claude Code (Keychain)** | macOS Keychain item `Claude Code-credentials`, read-only | By Claude Code (`claude`). Claude Bar never writes this item. |
-
-A Claude Code account change (a different account id, or the email when there is no id) drops the cached quota during the fetch that sees the new account, then stores that account's numbers.
-
-### Security
-
-- **Context Isolation**: The renderer cannot access Node.js
-- **Preload Bridge**: All IPC via a secure contextBridge
-- **Keychain**: Claude Code credentials are read, never written. Claude Bar does not collect or store Claude.ai tokens.
-- **Signed Updates**: Release builds are signed and notarized
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Start development server with hot reload
-npm run dev
-
-# Build for production
-npm run build
-
-# Create distributable DMG
-npm run dist
-
-# Build and publish release to GitHub (creates release, uploads DMGs + metadata)
-npm run release
-```
-
-### Project Structure
-
-```
-claude-bar/
-├── src/
-│   ├── main/           # Electron main process
-│   │   ├── services/   # Keychain, API, scheduler, notifications, updater
-│   │   ├── tray.ts     # Menu bar title, tooltip, context menu
-│   │   ├── tray-icon.ts # Template gauge bitmap
-│   │   └── windows.ts  # Popup and Settings windows
-│   ├── preload/        # Secure IPC bridge
-│   └── renderer/       # Popup, Settings, shared tokens
-├── tests/              # Vitest unit tests
-├── assets/             # App icon and screenshot
-└── scripts/            # App icon and screenshot generators, mac-dev.sh (run on the Mac)
-```
-
-### Running Tests
-
-```bash
-npm run test           # Run all tests
-npm run test:watch     # Run tests in watch mode
-npm run test:coverage  # Run tests with coverage report
-```
+Refreshes pause after 10 minutes of inactivity or while the screen is locked, and resume once the data is 30 minutes old. Opening the popup or unlocking the Mac asks for fresh numbers.
 
 ## Troubleshooting
 
-### "Claude Code is not connected"
+Each error in the popup and the tooltip says what to do. The common ones:
 
-Run `claude` in a terminal and sign in, then click **Retry** in the popup. The same fix applies when the popup says the saved session can't be read, the token expired, or Anthropic refused the session.
+| Message | Fix |
+|---------|-----|
+| Claude Code is not connected / No Claude Code session found | Run `claude` and sign in, then click **Retry**. |
+| Claude Code token expired / saved session can't be read / Anthropic refused this session | Run `claude` again. BurnBar never refreshes the token itself. |
+| Keychain access was denied | Click **Retry** and choose **Always Allow**. |
+| Couldn't read the Keychain | Unlock the login Keychain, allow BurnBar when macOS asks, then click **Retry**. |
+| Anthropic rate limit reached | Wait. The popup shows the next automatic try; BurnBar backs off for at least 2 minutes. |
+| Offline, or Anthropic can't be reached / Anthropic server error | Check your connection or [status.claude.com](https://status.claude.com). BurnBar retries with a growing delay. |
+| Codex is not signed in | Run `codex login`. |
+| Codex CLI not found / Grok CLI not found / OpenCode CLI not found | Install the CLI, or turn the tool off in **Settings → Providers**. If it is installed, make sure your login shell's `PATH` includes it. |
+| Couldn't read Codex limits | Update Codex. |
+| Couldn't read all Grok usage | One or more sessions could not be read; totals may be low until the next refresh. |
 
-### "Keychain access was denied" or "Couldn't read the Keychain"
+A manual refresh within 15 seconds of the last one only shows "Already up to date". Logs are in `~/Library/Application Support/burnbar/logs/burnbar.log`.
 
-Click **Retry**. When macOS asks whether Claude Bar may read `Claude Code-credentials`, choose **Always Allow**. If no prompt appears, unlock the login Keychain in Keychain Access. Claude Bar only reads that item and never changes it.
+If **Open at login** needs approval, Settings shows a button that opens System Settings → General → Login Items.
 
-### Quota not updating
+## Upgrading from Claude Bar
 
-The popup footer shows how old the data is ("Updated 25m ago"), in orange when it is outdated or the last refresh failed. The alert above the quotas says why (offline, Anthropic rate limit, server error) and when the next automatic try is. Opening the popup also retries.
+BurnBar is the new name of Claude Bar, starting with version 2.0.0.
 
-To retry now, click **Retry**, press ⌘R, or right-click the menu bar icon and choose **Refresh**. A manual refresh is ignored if the last one was less than 15 seconds ago, and during an Anthropic rate limit (at least 2 minutes).
+- **Settings carry over.** On first launch BurnBar copies Claude Bar's settings (refresh interval, display mode, alerts, language) if it has none yet.
+- **Auto-update works.** Claude Bar 1.8 offers the update like any other: the repository moved to `TimothePorterie/burnbar` and GitHub redirects the old address. The bundle identifier is unchanged, so macOS keeps your notification and login item permissions.
+- **The app may keep its old name on disk.** An in-place update replaces the contents of `Claude Bar.app` without renaming it. Rename it in Finder after quitting, or install the DMG and delete the old copy.
+- **Claude Code must be signed in.** The in-app login of Claude Bar 1.x is gone. Run `claude` once if you only signed in through Claude Bar.
 
-### "Cannot open application" on an unsigned build
+## Development
 
-Official release DMGs are notarized. A DMG you built locally without signing can be blocked by Gatekeeper. In that case:
+BurnBar is Electron 45, TypeScript, and electron-vite.
 
 ```bash
-xattr -cr /Applications/Claude\ Bar.app
-codesign --force --deep --sign - /Applications/Claude\ Bar.app
+git clone https://github.com/TimothePorterie/burnbar.git
+cd burnbar
+npm ci
+npm run dev          # run with hot reload
+npm run typecheck
+npm test             # Vitest
+npm run build        # production bundle
+npm run dist         # DMG and ZIP, arm64 and x64, in release/
 ```
 
-### App not starting
+`scripts/mac-dev.sh` runs on a Mac: it copies a remote working tree over SSH, builds it, relaunches the app, and tails the log. `scripts/render-icons.mjs` renders the app icon and `scripts/render-readme-shots.mjs` renders the image above from the real app under xvfb; both take a `playwright-core` path in `PLAYWRIGHT_CORE`.
 
-If the app fails to start, try removing it from Login Items and re-adding it through Settings. If macOS is waiting for approval, Settings shows a hint and a button that opens System Settings → General → Login Items.
+Architecture, data flow, and conventions are in [AGENTS.md](AGENTS.md). Changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
-## Acknowledgments
-
-- Built with [Electron](https://www.electronjs.org/) and [electron-vite](https://electron-vite.org/)
-- Inspired by the need to keep an eye on Claude Code usage without interrupting workflow
-
----
-
-<p align="center">
-  Made with ❤️ for Claude Code users
-</p>
+[MIT](LICENSE)

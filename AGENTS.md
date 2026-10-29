@@ -1,4 +1,4 @@
-# Claude Bar - Technical Documentation
+# BurnBar - Technical Documentation
 
 Canonical project instructions for agents and developers. `CLAUDE.md` only points here.
 
@@ -11,7 +11,7 @@ Canonical project instructions for agents and developers. `CLAUDE.md` only point
 
 ## Project Overview
 
-**Claude Bar** is a macOS menu bar application built with Electron that monitors Claude Code quotas in real time. It shows the session (5-hour) and weekly (7-day) quotas, per-model weekly quotas when the API sends them, and extra-usage overage when present. The only credential source is a read-only read of Claude Code's Keychain item.
+**BurnBar** is a macOS menu bar application built with Electron that monitors AI coding tool usage. For **Claude Code** it shows the session (5-hour) and weekly (7-day) quotas, per-model weekly quotas when the API sends them, and extra-usage overage when present; its only credential source is a read-only read of Claude Code's Keychain item. For **Codex** it shows the same session and weekly quotas, read from the official local `codex app-server`. For **Grok** and **OpenCode** it shows consumption only (cost and tokens), from their official CLIs: no official source exposes their limits. Cursor Agent is out of scope.
 
 - **Platform**: macOS 13.0+ (`minimumSystemVersion` in `electron-builder.json`). Electron 44+ requires macOS 13.
 - **Framework**: Electron 45 (`electron` ^45.1.0) + electron-vite 5
@@ -24,7 +24,7 @@ Canonical project instructions for agents and developers. `CLAUDE.md` only point
 ```
 Main Process (Electron)
 ├── index.ts              # App entry, single instance lock, wake-from-sleep restart
-├── tray.ts               # Menu bar title, tooltip, context menu, display modes
+├── tray.ts               # Menu bar title, tooltip, context menu, display modes, provider broadcast
 ├── tray-icon.ts          # Template gauge bitmap (session bar + weekly bar)
 ├── windows.ts            # Popup/settings windows, toggle + auto-hide, security hooks
 ├── ipc-handlers.ts       # IPC with the renderer
@@ -34,19 +34,23 @@ Main Process (Electron)
     ├── quota-api.ts      # Usage API, cache, account-change reset, throttling
     ├── quota-errors.ts   # HTTP / network / Keychain error classification (i18n keys)
     ├── status.ts         # Filtered public Anthropic status, main-process cache
+    ├── cli-path.ts       # Login-shell PATH, CLI resolution, child-process runner
+    ├── codex.ts          # Codex quotas via a short-lived `codex app-server`
+    ├── consumption.ts    # Grok / OpenCode usage (cost, tokens), 15 min cadence
+    ├── providers.ts      # Enabled providers, first-launch detection, menu bar choice, snapshot
     ├── settings-store.ts # Shared electron-store singleton
-    ├── scheduler.ts      # Auto-refresh timer with error backoff
+    ├── scheduler.ts      # Auto-refresh timer with error backoff (one per quota provider)
     ├── notifications.ts  # Threshold and reset notifications
     ├── updater.ts        # electron-updater + GitHub Releases
     └── logger.ts         # electron-log
 
 Shared
-├── types.ts              # QuotaInfo / QuotaError (main <-> renderer)
-├── quota.ts              # Thresholds, getQuotaLevel(), getForecast()
+├── types.ts              # QuotaInfo / CodexQuota / ProvidersSnapshot (main <-> renderer)
+├── quota.ts              # Thresholds, getQuotaLevel(), getForecast(), formatUsage()
 └── i18n.ts               # en/fr strings, t(), applyI18n()
 
 Preload
-└── index.ts              # contextBridge (`window.claudeBar`)
+└── index.ts              # contextBridge (`window.burnBar`)
 
 Renderer
 ├── shared/tokens.css     # Light/dark design tokens
@@ -55,15 +59,20 @@ Renderer
 
 Tests
 └── tests/                # Vitest: real modules, mocked electron / Keychain / store
+    ├── cli-path.test.ts
+    ├── codex.test.ts
+    ├── consumption.test.ts
     ├── forecast.test.ts
     ├── keychain.test.ts
     ├── notifications.test.ts
     ├── popup-shortcuts.test.ts
+    ├── providers.test.ts
     ├── quota-api.test.ts
     ├── quota-errors.test.ts
     ├── quota-level.test.ts
     ├── scheduler.test.ts
     ├── settings-store.test.ts
+    ├── status.test.ts
     ├── token-utils.test.ts
     ├── tray-icon.test.ts
     ├── tray.test.ts
@@ -79,13 +88,18 @@ Tests
 | `src/main/tray-icon.ts` | `renderGaugeBitmap`: thick session bar, thin weekly bar |
 | `src/main/windows.ts` | Popup and settings, auto-fit height, toggle, auto-hide, shortcuts, CSP, navigation guard |
 | `src/main/services/keychain.ts` | Reads `Claude Code-credentials` (never refreshes or writes) |
-| `src/main/services/quota-api.ts` | API, Keychain credentials, cache, `resetForAccountChange`, stale flag |
+| `src/main/services/quota-api.ts` | API, Keychain credentials, cache, `resetForAccountChange`, stale flag, `buildPeriod` |
+| `src/main/services/codex.ts` | `codex app-server` JSON-RPC read, parsing, Codex cache and errors |
+| `src/main/services/consumption.ts` | Grok and OpenCode usage, Grok per-session cache |
+| `src/main/services/providers.ts` | `providers` / `trayProvider` settings, detection, `getProvidersSnapshot()` |
+| `src/main/services/cli-path.ts` | PATH for CLIs when launched from the Finder |
+| `src/main/services/status.ts` | Anthropic status fetch, component filter, 5 min cache |
 | `src/main/services/notifications.ts` | Upward level crossings in `notifiedLevels`, reset notices in `resetNotifications` |
-| `src/main/services/settings-store.ts` | Shared electron-store singleton, legacy-login migration |
-| `src/main/services/scheduler.ts` | Interval refresh, rate-limit cooldown, exponential backoff |
+| `src/main/services/settings-store.ts` | Shared electron-store singleton, Claude Bar settings copy, legacy-login migration |
+| `src/main/services/scheduler.ts` | Interval refresh, rate-limit cooldown, exponential backoff; `schedulerService` (Claude) and `codexScheduler` |
 | `src/main/services/updater.ts` | Update check, download, install & restart, 6 h re-check |
 | `src/main/services/logger.ts` | File logging |
-| `src/preload/index.ts` | `window.claudeBar` |
+| `src/preload/index.ts` | `window.burnBar` |
 | `src/renderer/shared/tokens.css` | Shared light/dark tokens |
 | `src/shared/quota.ts` | Hardcoded 70% / 90% thresholds and `getForecast()` |
 
@@ -110,12 +124,26 @@ Tests
 - A second launch (`second-instance`) opens Settings.
 - `lastAccount` stores `accountUuid`, or `emailAddress` when there is no uuid. `getCredentials` calls `resetForAccountChange()` when a stored value differs. That drops the in-memory cache, `lastQuotaData`, `notifiedLevels`, `resetNotifications`, `extraUsageNotified`, and the last error, and bumps a generation counter so a response still in flight is discarded. The fetch that noticed the change then continues. The popup reloads user info on every `quota-updated`. Settings reloads the account block and the login-item hint on focus. The account block is "Connected" only when the Keychain item exists, its credentials are readable, and the last error is not `auth` or `keychain`; otherwise it is "Not Connected" with that error's message (or the unreadable-session message). On focus and on Account Refresh, a current `auth` / `keychain` error triggers `refresh-quota` first, so a fixed session shows as connected; otherwise only the Keychain status is re-read.
 
-### Display Modes (right-click menu)
-`showRemaining` (default false) switches displayed percentages to rounded `100 - utilization` in Standard, Detailed, Compact, tooltips, and every popup quota row. The setting is available in General and as a tray checkbox. Changing it closes the popup, refreshes the tray, and broadcasts `show-remaining-changed` to keep Settings synchronized. Missing sessions stay `—` in remaining mode. Gauges, levels, colors, forecasts, and the Time Remaining / Icon only titles retain their existing meaning.
+### Providers
+Four providers: `claude`, `codex` (quotas), `grok`, `opencode` (consumption only). Each has its own state (data, error, last success) and its own actionable messages; a failing provider never changes another one's data, title, dim, or errors.
 
-Persisted in `displayMode`.
+- **Detection**: on first launch (`providers` absent from the store) `detectProviders()` turns on each provider that is installed: Claude when its Keychain item exists (`has-credentials`), the others when their binary resolves on the CLI PATH. Nothing found keeps Claude on so the popup shows its sign-in hint. `trayProvider` is set to `claude` when Claude is on, otherwise `codex`. Schedulers start after detection.
+- **Settings > Providers** (FR **Outils**): one switch per provider with its status: Connected, Installed (Grok/OpenCode, plus "usage only, no quota"), Not installed, Not connected, or the error message. Switching on runs a forced read; switching off stops it (Claude and Codex schedulers are stopped). Toggling closes the popup so it is rebuilt with the new sections. The Account section (Claude's Keychain session) is hidden while Claude is off. **Menu bar shows**: `Claude | Codex | Highest` (`trayProvider`: `claude`, `codex`, `max`).
+- **Menu bar**: `getTrayProvider()` falls back to an enabled quota provider (`max` needs both on). `max` draws each gauge bar at the higher of the two values and the title from the more loaded provider (highest of its session / weekly). The icon dims under `max` only when both providers need attention.
+- **CLI PATH** (`cli-path.ts`): an app opened from the Finder has no shell PATH. On first need, `$SHELL -ilc` prints the login PATH between markers (5 s timeout, once, cached), then `process.env.PATH`, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.bun/bin`, `~/.volta/bin`, and every `~/.nvm/versions/node/*/bin` (newest first). Child processes get this PATH (`codex` is a node script).
+- **Codex** (`codex.ts`): spawns `codex app-server` (JSON-RPC over stdio), sends `initialize` (`clientInfo: { name: 'burnbar', version }`), `initialized`, then `account/rateLimits/read`, and kills the process as soon as the answer arrives, or after 20 s. It never reads `~/.codex/auth.json` or any token. Schema: `codex app-server generate-json-schema --out <dir>` (`v2/GetAccountRateLimitsResponse.json`). `rateLimits.primary` / `secondary` map by `windowDurationMins` (≤ 24 h is the session, else weekly; defaults 300 / 10080), `usedPercent` is the utilization, `resetsAt` is epoch seconds. Windows go through the same `buildPeriod` / `getForecast` as Claude. `planType` becomes a badge (`Team`, `Plus`, `Pro`…; unknown values show none). `rateLimitResetCredits.availableCount > 0` shows "N resets available". `rateLimitReachedType` or `spendControlReached` shows "Codex usage limit reached." Driven by `codexScheduler` (same interval, idle pause, backoff, stale rule and throttle as Claude: 290 s scheduled, 15 s forced). Not persisted across restarts.
+- **Codex errors**: binary missing → `codex.notInstalled` (status `not-installed`, data dropped); JSON-RPC error mentioning auth/login → `codex.notConnected` ("Run `codex login`", status `not-connected`, data dropped); network-like RPC error → `codex.network`; 20 s → `codex.timeout`; invalid result, exit without answer, other errors → `codex.failed` (cached data kept, flagged by the error and the age line).
+- **Grok** (`consumption.ts`): `grok sessions list` only lists the sessions of the current directory, and worktrees that no longer exist cannot be listed at all. BurnBar therefore discovers session IDs from the directory names `~/.grok/sessions/<project>/<uuid>/` and uses the mtime of `usage.json` (or of the directory) as the change key: no file content is read and no token is used. Sessions modified since the start of the 7-day window are read with `grok usage <id>` (JSON: `updatedAt`, `session.totalTokens`, `session.costUsdTicks`, 1e10 ticks = 1 USD). Results are cached by `(id, mtime)`, so only changed sessions run the CLI again. Approximation: a session counts entirely on the local day of its `updatedAt`. An unreadable session keeps the others and shows `grok.failed` (totals may be incomplete).
+- **OpenCode**: `opencode stats --json --days 0 --standalone` (today) and `--days 7 --standalone` (local midnight six days ago to now). `--standalone` runs a private server that exits with the command; the default mode goes through a persistent `opencode serve --service`. Tokens are input + output + reasoning + cache read + cache write; cost is USD.
+- **Consumption cadence**: at most every 15 minutes (timer, popup open and manual refresh all share the floor); switching a tool on forces a read. Grok and OpenCode run independently; a missing binary is `*.notInstalled` (data dropped), any other failure is `*.failed` (previous totals kept). There is no quota, forecast, or notification for them.
+- **Status pages**: only Anthropic's. `status.openai.com/api/v2/summary.json` answers but carries no `incidents` and no Codex CLI component (only "Codex in ChatGPT Desktop"), so Codex has no status banner.
+
+### Display Modes (right-click menu)
+`showRemaining` (default false) switches displayed percentages to rounded `100 - utilization` in Standard, Detailed, Compact, tooltips, every popup quota row, and collapsed section summaries, for Claude and Codex. The setting is available in General and as a tray checkbox. Changing it closes the popup, refreshes the tray, and broadcasts `show-remaining-changed` to keep Settings synchronized. Missing sessions stay `—` in remaining mode. Gauges, levels, colors, forecasts, and the Time Remaining / Icon only titles retain their existing meaning.
+
+Persisted in `displayMode`. Every mode uses the provider chosen by `trayProvider` (see Providers).
 - **Standard**: `45% / 32%` (session `—` when `fiveHour` is absent)
-- **Detailed**: `5h: 45% | 7d: 32%`, then each model as `| Opus: 10%` in whitelist order
+- **Detailed**: `5h: 45% | 7d: 32%`, then each model as `| Opus: 10%` in whitelist order. With Claude and Codex both on and holding data: `Claude 45% / 32% · Codex 22% / 12%` (no models)
 - **Compact**: session percentage, or `—`
 - **Time Remaining**: session `resetsIn`, or `—`
 
@@ -137,6 +165,8 @@ Same 70 / 90 thresholds, per session, per weekly window, and per model. One noti
 
 Session and weekly only: when the stored `resetNotifications` time for that window has passed and the max utilization recorded for that `resetsAt` was >= 70%, one notification — "Session quota reset" or "Weekly quota reset", body "You can resume." The same Alerts switch (`enableNotifications`) gates both. `checkAndNotify` returns immediately when there is no quota, an error, or `stale`. On that check, a legacy `notifiedLevels.sevenDayOpus` value is applied to `seven_day_opus` and the old key is deleted.
 
+Codex uses the same thresholds, reset notices and Alerts switch, with keys `codex.fiveHour` / `codex.sevenDay` in `notifiedLevels` and `resetNotifications`. Titles are "Codex session at 75%" / "Codex weekly at 75%", and "Codex session quota reset" / "Codex weekly quota reset". `checkCodex()` runs after a Codex refresh that produced new data, and ignores errors and stale data. Grok and OpenCode never notify.
+
 Extra usage uses the same Alerts switch: a notification when billed credits first become positive, then once at 50% and 90% of a positive monthly limit. Amounts are converted from cents and formatted with the current locale and reported currency, falling back to a decimal amount and currency code if invalid. `extraUsageNotified` stores the last amount and notified levels across restarts; a decrease in credits starts a new cycle. The first valid reading records reached levels without notifying. Missing or disabled extra usage is ignored, as are errors and stale quota data.
 
 ### Design (« Terre sur verre »)
@@ -144,7 +174,9 @@ Tokens live in `src/renderer/shared/tokens.css` (light, and dark via `prefers-co
 
 `--accent` is `#D97757`. Primary buttons, the selected segment, the on switch, the update bar, and links use `--accent-strong` (derived). The plan badge border uses `--accent`. Quota meters do not.
 
-Settings is grouped like System Settings: **Account**, **General**, **Updates**. Account is the Keychain status (dot, "Connected" / "Not Connected", email or display name, plan), a Refresh button, and the `claude` hint. Refresh is a segmented control **5 min | 10 min | 15 min**. Alerts and launch-at-login are switches. Appearance is a segmented control **Auto | Light | Dark** (`theme`): it sets `nativeTheme.themeSource`, which switches `prefers-color-scheme` in every window and the native vibrancy, so `tokens.css` needs no theme class. Language is a select. The login-item hint row is hidden unless `launchAtLoginStatus` is `requires-approval`.
+The popup has one section per enabled provider, in this order: Claude Code, Codex, then **Usage** (FR **Consommation**) with one line per tool, `Today $1.69 · 7d $12.40 · 2.3M tokens` (`formatUsage`: narrow-symbol USD and compact tokens in the current locale; the tokens are the 7-day total; the data age is the row tooltip). Each section head is a button: tool name, plan badge (`#subscriptionBadge` for Claude, `#codexPlan`), Codex's reset credits, and a chevron. Clicking collapses the section; collapsed, the head shows `session / weekly` (warning color when stale or failing). The collapsed state is kept in `localStorage` (`collapsed.<sectionId>`). The Codex section reuses the quota cards and its own age line ("Updated 5m ago"); with nothing cached it shows a skeleton until the first answer, then the error alert. The header shows the Claude account name, or `BurnBar` when Claude is off. With Claude alone, its signed-out state is the full-page card; with other providers, it is an alert inside the Claude section. With nothing enabled, the popup says to open Settings. The popup is at most 600 px tall and scrolls beyond that.
+
+Settings is grouped like System Settings: **Account**, **Providers**, **General**, **Updates**. The window is 420 × 850. Account is the Keychain status (dot, "Connected" / "Not Connected", email or display name, plan), a Refresh button, and the `claude` hint. Refresh is a segmented control **5 min | 10 min | 15 min**. Alerts and launch-at-login are switches. Appearance is a segmented control **Auto | Light | Dark** (`theme`): it sets `nativeTheme.themeSource`, which switches `prefers-color-scheme` in every window and the native vibrancy, so `tokens.css` needs no theme class. Language is a select. The login-item hint row is hidden unless `launchAtLoginStatus` is `requires-approval`.
 
 Accessibility: meters and the update bar are `role="progressbar"` with `aria-valuenow`; `:focus-visible` uses the accent focus ring; `prefers-reduced-motion: reduce` disables animations and transitions. `prefers-contrast: more` sets secondary ink to `--ink`, hairline to `currentColor`, and a 1 px border on `.meter`. `prefers-reduced-transparency: reduce` uses an opaque surface (`#fff`, `#292826` in dark) and an opaque page background (`#F5F3EF`, `#1F1E1D` in dark). Segmented controls are `radiogroup` / `radio`. Switches are `role="switch"`.
 
@@ -168,7 +200,7 @@ Accessibility: meters and the update bar are `role="progressbar"` with `aria-val
 - Scheduler: concurrent `refresh()` calls share one run. Exponential backoff on retryable errors, multiplier capped at 8× the interval. A refresh answered from the cache without a request (throttle) leaves the backoff and timers unchanged. `stop()` (including wake-from-sleep) clears retry timers and the error count.
 - Throttle: scheduled fetches need ~5 min since the last success (290 s). Manual refresh floor is 15 s. A clock set back (negative elapsed time) never throttles.
 - Opening the popup resends the cached quota, or the last error when nothing is cached, then requests a non-forced refresh.
-- Error types: `network`, `auth`, `keychain`, `rate_limit`, `server`, `unknown`.
+- Error types: `network`, `auth`, `keychain`, `rate_limit`, `server`, `unknown`. Codex, Grok and OpenCode errors use the same `QuotaErrorState` keys (see Providers).
 
 ### Auto-Updates
 - Packaged builds only. `autoDownload` is false. `autoInstallOnAppQuit` is true.
@@ -183,7 +215,9 @@ The main process fetches `https://status.claude.com/api/v2/summary.json` alongsi
 - "No active session" when `fiveHour` is absent, otherwise the session percentage and time until reset. Weekly percentage and time until reset. Each model the same way.
 - Data age ("Updated 25m ago").
 - Last error message (any type, backticks removed), the next try when scheduled, and `tray.stale` when `stale` is set.
-- With nothing cached: `Claude Bar —` plus the error message and the next try, or `tray.clickToView` when there is no error.
+- With nothing cached: `BurnBar —` plus the error message and the next try, or `tray.clickToView` when there is no error.
+
+With Claude alone, the tooltip is exactly the list above. Otherwise it has one block per enabled provider, separated by a blank line: `Claude Code` then its lines (or its error and next try, or `—`); `Codex` then session, weekly, limit reached, reset credits, age, error, next try, stale; then one block with `Grok: Today … · 7d … · … tokens` and `OpenCode: …` (or the tool's error).
 
 ## Not Yet Implemented
 
@@ -192,17 +226,19 @@ The main process fetches `https://status.claude.com/api/v2/summary.json` alongsi
 - Pause mode.
 - Time-to-critical estimate (the forecast projects 100%, not 70% or 90%).
 - Configurable thresholds (70 / 90 are constants in `src/shared/quota.ts`. The Alerts subtitle in Settings still says 70% and 90%).
+- Codex: no persistence across restarts, no account-change reset of `codex.*` notification levels, no status banner (see Providers).
+- Quotas for Grok and OpenCode (no official source).
 
 ## Data Flow
 
-1. Startup loads settings (the legacy `authMode` migration runs when the store module loads), hides the dock icon, and creates the tray.
-2. `QuotaService` reads `KeychainService` and calls the usage API.
+1. Startup loads settings (the legacy `authMode` migration runs when the store module loads), hides the dock icon, creates the tray, and runs first-launch provider detection.
+2. `QuotaService` reads `KeychainService` and calls the usage API. In parallel and independently, `codexScheduler` reads `codex app-server` and `consumptionService` runs the Grok / OpenCode CLIs.
 3. The usage API call applies the rate-limit rules above. A changed `lastAccount` resets the previous account inside that fetch.
-4. Tray title, tooltip, and icon update. The popup receives `quota-updated` or, when there is an error and no quota, `quota-error`.
+4. Tray title, tooltip, and icon update. The popup receives `quota-updated` or, when there is an error and no quota, `quota-error` (Claude), and `providers-updated` (Codex, Grok, OpenCode, enabled flags, statuses; Settings receives it too).
 5. The popup reports its height and the window resizes.
-6. The scheduler repeats at `refreshInterval`.
+6. The Claude and Codex schedulers repeat at `refreshInterval`; consumption every 15 min.
 
-Startup waits 2 s before the first scheduler start, and 5 s before the first update check. On `powerMonitor` `resume`, the scheduler is stopped and started again after 2 s (`start(true)`). A second instance opens Settings.
+Startup waits 2 s (and for detection) before the first scheduler start, and 5 s before the first update check. On `powerMonitor` `resume`, both schedulers are stopped and started again after 2 s (`start(true)`). Lock, unlock and `user-did-become-active` apply to both. ⌘R and the popup refresh button force both quota providers; consumption keeps its 15 min floor. The tray menu Refresh forces Claude only. A second instance opens Settings.
 
 ## API Integration
 
@@ -249,15 +285,19 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
 
 | Channel | Direction | Purpose |
 |---------|-----------|---------|
-| `get-quota` | renderer -> main | Cached quota, including optional filtered Anthropic `status` |
-| `refresh-quota` | renderer -> main | Force refresh. Returns `{ quota, throttled, retryIn }` |
+| `get-quota` | renderer -> main | Cached Claude quota, including optional filtered Anthropic `status` |
+| `get-providers` | renderer -> main | `ProvidersSnapshot`: enabled flags, statuses, Codex quota / error, Grok and OpenCode usage / error |
+| `set-provider-enabled` | renderer -> main | Provider id and boolean. Starts or stops its refresh, closes the popup, refreshes the tray, broadcasts `providers-updated` |
+| `set-tray-provider` | renderer -> main | `claude`, `codex`, or `max` |
+| `providers-updated` | main -> renderer | `ProvidersSnapshot` broadcast (popup and Settings). Preload: `onProvidersUpdated` |
+| `refresh-quota` | renderer -> main | Force refresh of Claude and Codex (consumption keeps its floor). Returns Claude's `{ quota, throttled, retryIn }` |
 | `has-credentials` | renderer -> main | Keychain item `Claude Code-credentials` exists |
 | `get-user-info` | renderer -> main | Email, display name, subscription type from that item |
-| `get-settings` | renderer -> main | `refreshInterval`, `launchAtLogin`, `launchAtLoginStatus` (packaged only), `enableNotifications`, `showRemaining`, `language`, `theme` |
-| `set-refresh-interval` | renderer -> main | 300, 600, or 900 |
+| `get-settings` | renderer -> main | `refreshInterval`, `launchAtLogin`, `launchAtLoginStatus` (packaged only), `enableNotifications`, `showRemaining`, `language`, `theme`, `trayProvider` |
+| `set-refresh-interval` | renderer -> main | 300, 600, or 900 (Claude and Codex) |
 | `set-launch-at-login` | renderer -> main | Stores the flag. Packaged builds also call `setLoginItemSettings` |
 | `open-login-items-settings` | renderer -> main | Opens System Settings → Login Items |
-| `set-enable-notifications` | renderer -> main | Threshold, reset, and extra-usage notifications |
+| `set-enable-notifications` | renderer -> main | Threshold, reset, and extra-usage notifications (Claude and Codex) |
 | `set-show-remaining` | renderer -> main | Boolean; updates remaining percentages, refreshes tray, closes popup |
 | `open-status-page` | renderer -> main | Opens only URLs starting with `https://status.claude.com/` or `https://status.anthropic.com/` |
 | `show-remaining-changed` | main -> renderer | Boolean preference broadcast; preload `onShowRemainingChanged` |
@@ -290,14 +330,16 @@ Thresholds: `WARNING_THRESHOLD` / `CRITICAL_THRESHOLD` in `src/shared/quota.ts`.
   displayMode: 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
   rateLimitedUntil: number      // internal
   lastQuotaData: object | null  // internal, restored if younger than 24 h
-  notifiedLevels: object        // internal, per period: 'normal' | 'warning' | 'critical'
-  resetNotifications: object    // internal, fiveHour / sevenDay: { resetsAt, utilization }
+  notifiedLevels: object        // internal, per period: 'normal' | 'warning' | 'critical' (Codex: 'codex.fiveHour', 'codex.sevenDay')
+  resetNotifications: object    // internal, fiveHour / sevenDay / codex.fiveHour / codex.sevenDay: { resetsAt, utilization }
   extraUsageNotified?: { used: number; levels: ('started' | '50' | '90')[] } // internal, absent until first reading
   lastAccount: string | null    // internal, accountUuid or emailAddress
+  providers?: Record<'claude' | 'codex' | 'grok' | 'opencode', boolean> // absent until first-launch detection
+  trayProvider: 'claude' | 'codex' | 'max' // default 'claude'; set by detection
 }
 ```
 
-The renderer `Settings` type is `refreshInterval`, `launchAtLogin`, optional `launchAtLoginStatus` (`not-registered` | `enabled` | `requires-approval` | `not-found`), `enableNotifications`, `showRemaining`, `language`, and `theme`. `launchAtLoginStatus` is read from the system on packaged builds and is not stored.
+The renderer `Settings` type is `refreshInterval`, `launchAtLogin`, optional `launchAtLoginStatus` (`not-registered` | `enabled` | `requires-approval` | `not-found`), `enableNotifications`, `showRemaining`, `language`, `theme`, and `trayProvider`. `launchAtLoginStatus` is read from the system on packaged builds and is not stored.
 
 `displayMode: 'minimal'` is the Icon only menu item.
 
@@ -321,10 +363,19 @@ npm run test:coverage
 The app is developed on the VPS but only runs on macOS. On the Mac, one command copies the VPS working tree (uncommitted changes included, no `.git`), installs when `package-lock.json` changed, builds, relaunches the app, and tails its log:
 
 ```bash
-ssh debian@vps-lanacool cat Projets/claude-bar/scripts/mac-dev.sh | sh
+ssh debian@vps-lanacool cat Projets/burnbar/scripts/mac-dev.sh | sh
 ```
 
-`VPS_HOST`, `VPS_DIR`, and `MAC_DIR` (default `~/claude-bar-dev`) override the defaults. The log is `/tmp/claude-bar-dev.log`.
+`VPS_HOST`, `VPS_DIR`, and `MAC_DIR` (default `~/burnbar-dev`) override the defaults. The log is `/tmp/burnbar-dev.log`.
+
+### Images
+
+No npm dependency: both scripts load an existing `playwright-core` from `PLAYWRIGHT_CORE` (and an optional `CHROMIUM` executable).
+
+- `scripts/render-icons.mjs`: `assets/app-icon.svg` to `assets/icon.png` (1024×1024).
+- `scripts/render-readme-shots.mjs`: `assets/readme/popup.png`, the README image. It launches the built app (`npm run build` first) under xvfb with a temporary HOME, fake `security` / `codex` / `grok` / `opencode` binaries, and a stubbed `fetch` for the usage API, captures the popup in light and dark at 2x, and composes them under a menu bar on a warm backdrop (rendered at 1.5x, ~360 KB). Inter (OFL, in `~/.local/share/fonts`) replaces the system font through CSS injected for the capture only. Run it through the heavy-command lock.
+
+README logos are `assets/logo-readme-light.svg` / `assets/logo-readme-dark.svg` (`<picture>` with `prefers-color-scheme`). Release notes go in `CHANGELOG.md` (Keep a Changelog).
 
 ## CI
 
@@ -337,7 +388,7 @@ ssh debian@vps-lanacool cat Projets/claude-bar/scripts/mac-dev.sh | sh
 ## Build Output
 
 - DMG and ZIP for `arm64` and `x64`, under `release/`.
-- App ID: `com.claude-bar.app`.
+- App ID stays `com.claude-bar.app` on purpose (renaming it would make macOS treat BurnBar as a new app).
 - Fuses are the `electronFuses` block in `electron-builder.json` (`runAsNode`, `enableNodeOptionsEnvironmentVariable`, and `enableNodeCliInspectArguments` false; embedded asar integrity, `onlyLoadAppFromAsar`, and cookie encryption true).
 
 ## Security Model
@@ -348,16 +399,19 @@ ssh debian@vps-lanacool cat Projets/claude-bar/scripts/mac-dev.sh | sh
 - **Preload**: `contextBridge.exposeInMainWorld` only.
 - **No in-app login.** [Anthropic's terms](https://code.claude.com/docs/en/legal-and-compliance) (Authentication and credential use) forbid a third-party app from offering Claude.ai login and from collecting or storing Claude.ai tokens. The removed flow reused Claude Code's `client_id`. Do not add that flow back: no authorize URL, no token endpoint, no `safeStorage` token store, no `authMode`.
 - **Keychain**: read-only. Claude Code owns the item and its refresh.
+- **Other providers**: official local CLIs only, never an undocumented API with the user's token (same rule as the removed in-app login). Codex: `codex app-server`, never `~/.codex/auth.json`. Grok: `grok usage <id>`; session IDs come from directory names under `~/.grok/sessions/` (names and mtimes only). OpenCode: `opencode stats --standalone`. Every child process has a timeout (Codex 20 s, Grok / OpenCode 20 s each, login shell 5 s) and is killed after use: no daemon is left behind.
 - **CSP**: `<meta>` in each renderer HTML. `connect-src` is `'self'` and `https://api.anthropic.com` only. `onHeadersReceived` sets the same CSP, but that header does not apply to `loadFile` pages.
 - **Navigation**: `will-navigate` allows `file:` and, in development, the exact `ELECTRON_RENDERER_URL` origin. New windows are denied. Permission requests are denied.
 
 ## File Locations
 
-All app files are under Electron `userData` (in development, `~/Library/Application Support/claude-bar/`):
+All app files are under Electron `userData` (in development, `~/Library/Application Support/burnbar/`):
 
 - **Settings**: `config.json` (electron-store default name)
-- **Logs**: `logs/claude-bar.log` (max 5 MB)
+- **Logs**: `logs/burnbar.log` (max 5 MB)
 - **CLI credentials**: macOS Keychain item `Claude Code-credentials`
+
+BurnBar was named Claude Bar until 2.0.0. When `config.json` is missing, the store first copies `<appData>/claude-bar/config.json` (the previous app's settings); the usual migrations (interval floor, legacy `authMode`, see Token Management) then run on it.
 
 `auth-store.json` is not a current store. The legacy migration deletes it when `authMode` is still in `config.json`.
 
@@ -372,3 +426,4 @@ Local installs: npm `allowScripts` can skip Electron's postinstall, so `node_mod
 ## Known Issues
 
 - Local notarization needs `APPLE_KEYCHAIN_PROFILE=claude-bar-notarize-apikey` exported explicitly (the old `scripts/notarize.js` picked it implicitly).
+- Under Linux / xvfb (smoke tests), `setSize` never shrinks the non-resizable popup, and `nativeTheme` does not switch `prefers-color-scheme`. macOS is not affected.
