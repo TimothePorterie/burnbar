@@ -1,6 +1,5 @@
-import { ipcMain, app, BrowserWindow } from 'electron'
+import { ipcMain, app, BrowserWindow, shell } from 'electron'
 import { keychainService } from './services/keychain'
-import { authService } from './services/auth'
 import { quotaService, QuotaInfo } from './services/quota-api'
 import { schedulerService } from './services/scheduler'
 import { updaterService } from './services/updater'
@@ -9,7 +8,7 @@ import { windowManager } from './windows'
 import { trayManager } from './tray'
 import { settingsStore as store } from './services/settings-store'
 import type { Locale } from '../shared/i18n'
-import { setLocale, t } from '../shared/i18n'
+import { setLocale } from '../shared/i18n'
 
 // Input validation helpers
 const VALID_REFRESH_INTERVALS = [300, 600, 900] as const
@@ -22,12 +21,7 @@ function isValidBoolean(value: unknown): value is boolean {
   return typeof value === 'boolean'
 }
 
-const VALID_AUTH_MODES = ['app', 'cli'] as const
 const VALID_LANGUAGES = ['en', 'fr'] as const
-
-function isValidAuthMode(value: unknown): value is 'app' | 'cli' {
-  return typeof value === 'string' && VALID_AUTH_MODES.includes(value as 'app' | 'cli')
-}
 
 function isValidLanguage(value: unknown): value is Locale {
   return typeof value === 'string' && VALID_LANGUAGES.includes(value as Locale)
@@ -41,11 +35,9 @@ function broadcast(channel: string, data: unknown): void {
   })
 }
 
-// Login, logout and auth mode change: drop the previous account's data, then fetch the new one
-function resetAccount(): void {
-  quotaService.resetForAccountChange()
-  windowManager.closePopup() // rebuilt with the new account's user info on next open
-  void schedulerService.refresh(true)
+// macOS 13+: 'requires-approval' means the user must allow the app in System Settings > General > Login Items
+function loginItemStatus(): Electron.LoginItemSettings['status'] | undefined {
+  return app.isPackaged ? app.getLoginItemSettings().status : undefined
 }
 
 export function setupIpcHandlers(): void {
@@ -77,7 +69,7 @@ export function setupIpcHandlers(): void {
   // Check if credentials exist
   ipcMain.handle('has-credentials', async (): Promise<boolean> => {
     try {
-      return store.get('authMode') === 'app' ? authService.hasTokens() : await keychainService.hasCredentials()
+      return await keychainService.hasCredentials()
     } catch (error) {
       logger.error('IPC has-credentials error:', error)
       return false
@@ -89,16 +81,6 @@ export function setupIpcHandlers(): void {
     'get-user-info',
     async (): Promise<{ email?: string; name?: string; subscriptionType?: string } | null> => {
       try {
-        if (store.get('authMode') === 'app') {
-          if (!authService.hasTokens()) return null
-          const authUserInfo = authService.getUserInfo()
-          return {
-            email: authUserInfo?.email,
-            name: authUserInfo?.name,
-            subscriptionType: authUserInfo?.subscriptionType
-          }
-        }
-
         const credentials = await keychainService.getCredentials()
         if (!credentials) return null
 
@@ -120,7 +102,7 @@ export function setupIpcHandlers(): void {
       return {
         refreshInterval: store.get('refreshInterval'),
         launchAtLogin: store.get('launchAtLogin'),
-        authMode: store.get('authMode'),
+        launchAtLoginStatus: loginItemStatus(),
         enableNotifications: store.get('enableNotifications'),
         language: store.get('language')
       }
@@ -129,7 +111,6 @@ export function setupIpcHandlers(): void {
       return {
         refreshInterval: 300,
         launchAtLogin: false,
-        authMode: 'app',
         enableNotifications: true,
         language: 'en'
       }
@@ -163,6 +144,7 @@ export function setupIpcHandlers(): void {
       store.set('launchAtLogin', enabled)
       if (app.isPackaged) {
         app.setLoginItemSettings({ openAtLogin: enabled })
+        if (loginItemStatus() === 'requires-approval') logger.warn('Login item requires approval in System Settings')
       } else {
         logger.debug('Skipping setLoginItemSettings in development mode')
       }
@@ -174,21 +156,12 @@ export function setupIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('set-auth-mode', (_event, mode: unknown) => {
-    if (!isValidAuthMode(mode)) {
-      logger.warn(`Invalid auth mode rejected: ${mode}`)
-      return false
-    }
-
+  ipcMain.handle('open-login-items-settings', async () => {
     try {
-      if (store.get('authMode') !== mode) {
-        store.set('authMode', mode)
-        resetAccount()
-      }
-      logger.info(`Auth mode set to '${mode}'`)
+      await shell.openExternal('x-apple.systempreferences:com.apple.LoginItems-Settings.extension')
       return true
     } catch (error) {
-      logger.error('IPC set-auth-mode error:', error)
+      logger.error('IPC open-login-items-settings error:', error)
       return false
     }
   })
@@ -236,57 +209,6 @@ export function setupIpcHandlers(): void {
     } catch (error) {
       logger.error('IPC get-last-error error:', error)
       return null
-    }
-  })
-
-  // Auth handlers
-  ipcMain.handle('auth-start-login', async (): Promise<boolean> => {
-    try {
-      return await authService.startLogin()
-    } catch (error) {
-      logger.error('IPC auth-start-login error:', error)
-      return false
-    }
-  })
-
-  ipcMain.handle(
-    'auth-submit-code',
-    async (_event, code: unknown): Promise<{ success: boolean; error?: string }> => {
-      if (typeof code !== 'string') {
-        return { success: false, error: t('error.invalidCodeFormat') }
-      }
-      try {
-        const result = await authService.submitCode(code)
-        if (result.success && store.get('authMode') === 'app') {
-          resetAccount()
-        }
-        return result
-      } catch (error) {
-        logger.error('IPC auth-submit-code error:', error)
-        return { success: false, error: t('error.unexpected') }
-      }
-    }
-  )
-
-  ipcMain.handle('auth-logout', (): boolean => {
-    try {
-      authService.logout()
-      if (store.get('authMode') === 'app') {
-        resetAccount()
-      }
-      return true
-    } catch (error) {
-      logger.error('IPC auth-logout error:', error)
-      return false
-    }
-  })
-
-  ipcMain.handle('auth-get-state', (): string => {
-    try {
-      return authService.getState()
-    } catch (error) {
-      logger.error('IPC auth-get-state error:', error)
-      return 'unauthenticated'
     }
   })
 
@@ -345,8 +267,7 @@ export function setupIpcHandlers(): void {
     }
   })
 
-  // Forward auth state changes to all renderer windows
-  authService.onStateChange((state) => broadcast('auth-state-changed', state))
+  ipcMain.handle('quit-app', () => app.quit())
 }
 
 export function loadSettings(): void {
@@ -362,7 +283,8 @@ export function loadSettings(): void {
 
     // The system Login Items list is the source of truth (the user can change it in System Settings)
     if (app.isPackaged) {
-      store.set('launchAtLogin', app.getLoginItemSettings().openAtLogin)
+      const { openAtLogin, status } = app.getLoginItemSettings()
+      store.set('launchAtLogin', openAtLogin || status === 'requires-approval')
     }
 
     const language = store.get('language')

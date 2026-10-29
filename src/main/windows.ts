@@ -3,6 +3,7 @@ import { join } from 'path'
 import { trayManager } from './tray'
 import { logger } from './services/logger'
 import { quotaService } from './services/quota-api'
+import { schedulerService } from './services/scheduler'
 
 // Content Security Policy
 const CSP = [
@@ -11,7 +12,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'", // Allow inline styles for dynamic styling
   "img-src 'self' data:",
   "font-src 'self'",
-  "connect-src 'self' https://api.anthropic.com https://console.anthropic.com", // Allow Anthropic API + OAuth token endpoint
+  "connect-src 'self' https://api.anthropic.com", // Allow Anthropic API
   "frame-src 'none'",
   "object-src 'none'",
   "base-uri 'self'",
@@ -77,6 +78,11 @@ export class WindowManager {
     if (!trayBounds) return
 
     const { width } = this.popupWindow.getBounds()
+    if (trayBounds.width === 0) {
+      const area = screen.getPrimaryDisplay().workArea
+      this.popupWindow.setPosition(area.x + area.width - width - 10, area.y + 5)
+      return
+    }
     const area = screen.getDisplayNearestPoint({ x: trayBounds.x, y: trayBounds.y }).workArea
     let x = Math.round(trayBounds.x - width / 2 + trayBounds.width / 2)
     x = Math.max(area.x + 10, Math.min(x, area.x + area.width - width - 10))
@@ -238,6 +244,21 @@ export class WindowManager {
         this.popupWindow.loadFile(join(__dirname, '../renderer/popup/index.html'))
       }
     }
+
+    this.popupWindow.webContents.on('before-input-event', (event, input) => {
+      if (input.type !== 'keyDown') return
+      const key = input.key.toLowerCase()
+      if (key === 'escape') {
+        event.preventDefault()
+        this.hidePopup()
+      } else if (input.meta && !input.alt && !input.control && !input.shift) {
+        if (!['r', ',', 'q'].includes(key)) return
+        event.preventDefault()
+        if (key === 'r') void schedulerService.refresh(true)
+        if (key === ',') this.showSettings()
+        if (key === 'q') app.quit()
+      }
+    })
 
     // Hide when loses focus
     this.popupWindow.on('blur', () => this.hidePopup())

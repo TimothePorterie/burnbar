@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com https://console.anthropic.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Claude Bar</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -14,7 +14,7 @@
           <span class="user-name" id="userName" data-i18n="popup.loading">Loading...</span>
           <span class="plan" id="subscriptionBadge" hidden></span>
         </div>
-        <button class="icon-btn" id="refreshBtn" data-i18n-title="popup.refresh" title="Refresh">
+        <button class="icon-btn" id="refreshBtn" data-i18n-title="popup.refreshShortcut">
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M23 4v6h-6M1 20v-6h6"/>
             <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
@@ -26,8 +26,7 @@
         <p class="selectable" id="errorMessage"></p>
         <p class="alert-guidance selectable" id="errorGuidance"></p>
         <div class="alert-actions">
-          <button class="btn" id="errorRetryBtn" data-i18n="popup.retry">Retry</button>
-          <button class="btn primary" id="errorLoginBtn" data-i18n="popup.login" hidden>Log In</button>
+          <button class="btn" id="errorRetryBtn" data-i18n="popup.retry" data-i18n-title="popup.refreshShortcut">Retry</button>
         </div>
       </div>
 
@@ -44,6 +43,8 @@
           </div>
           <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="fiveHourLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
           <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
+          <span class="quota-forecast" hidden></span>
+          <span class="pace-badge" hidden></span>
         </div>
 
         <div class="quota" id="sevenDay">
@@ -53,14 +54,19 @@
           </div>
           <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="sevenDayLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
           <div class="quota-meta"><span class="quota-reset"></span><span class="quota-level"></span></div>
+          <span class="quota-forecast" hidden></span>
+          <span class="pace-badge" hidden></span>
         </div>
 
-        <div class="quota compact" id="opus" hidden>
-          <span class="quota-label" id="opusLabel" data-i18n="popup.opus">Opus (7d)</span>
-          <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="opusLabel"><span class="meter-fill"></span><span class="meter-pace"></span></div>
-          <span class="quota-level"></span>
-          <span class="quota-value">--%</span>
-        </div>
+        <div id="modelQuotas"></div>
+        <template id="modelQuotaTemplate">
+          <div class="quota compact">
+            <span class="quota-label"></span>
+            <div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="meter-fill"></span><span class="meter-pace"></span></div>
+            <span class="quota-level"></span>
+            <span class="quota-value">--%</span>
+          </div>
+        </template>
 
         <div class="extra" id="extraUsage" hidden>
           <span class="quota-label" data-i18n="popup.overage">Overage</span>
@@ -70,14 +76,17 @@
 
       <footer class="footer" id="footer" hidden>
         <span id="lastUpdated"></span>
-        <button class="link" id="settingsLink" data-i18n="popup.settings">Settings</button>
+        <div class="footer-actions">
+          <button class="link" id="settingsLink" data-i18n="popup.settings" data-i18n-title="popup.settingsShortcut">Settings</button>
+          <button class="link quit" id="quitBtn" data-i18n="popup.quit" data-i18n-title="popup.quitShortcut">Quit</button>
+        </div>
       </footer>
 
       <div class="empty" id="notConnected" hidden>
-        <h1 data-i18n="popup.notConnected">Not Connected</h1>
-        <p data-i18n="popup.notConnectedDesc">Log in to monitor your Claude Code quotas</p>
-        <button class="btn primary" id="popupLoginBtn" data-i18n="popup.login">Log In</button>
-        <p class="empty-hint"><span data-i18n="popup.cliHint">Or via CLI:</span> <code>claude login</code></p>
+        <h1 data-i18n="popup.notConnected"></h1>
+        <p id="notConnectedDesc" class="selectable"></p>
+        <button class="btn primary" id="signedOutRetryBtn" data-i18n="popup.retry" data-i18n-title="popup.refreshShortcut">Retry</button>
+        <button class="link" id="signedOutSettingsLink" data-i18n="popup.settings" data-i18n-title="popup.settingsShortcut">Settings</button>
       </div>
 
       <div class="toast" id="toast" role="status" aria-live="polite"></div>

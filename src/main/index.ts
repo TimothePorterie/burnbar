@@ -3,7 +3,6 @@ import { trayManager } from './tray'
 import { windowManager } from './windows'
 import { schedulerService } from './services/scheduler'
 import { updaterService } from './services/updater'
-import { authService } from './services/auth'
 import { setupIpcHandlers, loadSettings } from './ipc-handlers'
 import { logger } from './services/logger'
 
@@ -14,7 +13,7 @@ if (!gotTheLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    windowManager.showPopup()
+    windowManager.showSettings()
   })
 
   if (app.dock) {
@@ -26,9 +25,6 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     logger.info(`Claude Bar v${app.getVersion()} starting...`)
-
-    // Initialize auth service
-    authService.initialize()
 
     // Setup IPC handlers
     setupIpcHandlers()

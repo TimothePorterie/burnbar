@@ -1,22 +1,32 @@
 import Store from 'electron-store'
+import { app } from 'electron'
+import { rmSync } from 'fs'
+import { join } from 'path'
+
+interface PersistedQuotaPeriod {
+  utilization: number
+  resetsAt: string | null
+}
 
 interface PersistedQuotaData {
-  fiveHour: { utilization: number; resetsAt: string | null }
+  fiveHour?: PersistedQuotaPeriod
   sevenDay: { utilization: number; resetsAt: string | null }
-  sevenDayOpus?: { utilization: number; resetsAt: string | null }
+  sevenDayOpus?: PersistedQuotaPeriod
+  models?: { key: string; label: string; period: PersistedQuotaPeriod }[]
   fetchedAt: number
 }
 
 interface SettingsStoreSchema {
   refreshInterval: number
   launchAtLogin: boolean
-  authMode: 'app' | 'cli'
   enableNotifications: boolean
   language: 'en' | 'fr'
   rateLimitedUntil: number
   lastQuotaData: PersistedQuotaData | null
   displayMode: string
+  resetNotifications: Record<string, { resetsAt: number; utilization: number }>
   notifiedLevels: Record<string, 'normal' | 'warning' | 'critical'>
+  lastAccount: string | null
 }
 
 export type { PersistedQuotaData }
@@ -26,13 +36,14 @@ export const settingsStore = new Store<SettingsStoreSchema>({
   defaults: {
     refreshInterval: 300,
     launchAtLogin: false,
-    authMode: 'app' as const,
     enableNotifications: true,
     language: 'en' as const,
     rateLimitedUntil: 0,
     lastQuotaData: null,
     displayMode: 'standard',
-    notifiedLevels: {}
+    resetNotifications: {},
+    notifiedLevels: {},
+    lastAccount: null
   }
 })
 
@@ -40,4 +51,14 @@ export const settingsStore = new Store<SettingsStoreSchema>({
 const currentInterval = settingsStore.get('refreshInterval')
 if (currentInterval < 120) {
   settingsStore.set('refreshInterval', 300)
+}
+
+// Migrate: in-app OAuth login was removed; drop its leftovers once
+const legacyStore = settingsStore as unknown as Store<Record<string, unknown>>
+if (legacyStore.has('authMode')) {
+  legacyStore.delete('authMode')
+  // The cached quota may belong to the in-app account rather than Claude Code's
+  settingsStore.set('lastQuotaData', null)
+  settingsStore.set('notifiedLevels', {})
+  rmSync(join(app.getPath('userData'), 'auth-store.json'), { force: true })
 }

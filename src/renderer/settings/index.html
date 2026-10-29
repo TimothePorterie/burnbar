@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com https://console.anthropic.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.anthropic.com; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Claude Bar Settings</title>
     <link rel="stylesheet" href="./styles.css" />
@@ -18,14 +18,6 @@
         <h2 data-i18n="settings.account">Account</h2>
         <div class="group">
           <div class="row">
-            <span class="row-label" id="authModeLabel" data-i18n="settings.source">Source</span>
-            <div class="segmented" id="authMode" role="radiogroup" aria-labelledby="authModeLabel">
-              <button role="radio" data-value="app" data-i18n-title="settings.authModeApp" title="Claude Bar (OAuth)">App</button>
-              <button role="radio" data-value="cli" data-i18n-title="settings.authModeCli" title="Claude Code (Keychain)">CLI</button>
-            </div>
-          </div>
-
-          <div class="row">
             <div class="status">
               <span class="status-dot" id="statusIndicator" aria-hidden="true"></span>
               <div class="status-info">
@@ -33,21 +25,10 @@
                 <span class="row-sub selectable" id="statusEmail"></span>
               </div>
             </div>
-            <button class="btn" id="logoutBtn" data-i18n="settings.logout" hidden>Log Out</button>
-            <button class="btn primary" id="loginBtn" data-i18n="settings.loginWithClaude" hidden>Log In with Claude</button>
+            <button class="btn" id="refreshAccountBtn" data-i18n="settings.refreshAccount">Refresh</button>
           </div>
 
-          <p class="row note" id="cliHint" hidden></p>
-
-          <div class="row auth-code" id="authCodeSection" hidden>
-            <label for="authCodeInput" class="row-sub" data-i18n="settings.authHint">Authenticate in your browser, then paste the code below:</label>
-            <div class="auth-code-input">
-              <input type="text" id="authCodeInput" data-i18n-placeholder="settings.authPlaceholder" placeholder="Paste authorization code here" spellcheck="false" autocomplete="off" />
-              <button class="btn primary" id="validateBtn" data-i18n="settings.validate">Validate</button>
-              <button class="btn" id="cancelLoginBtn" data-i18n="settings.cancel">Cancel</button>
-            </div>
-            <span class="auth-error selectable" id="authError" role="alert" hidden></span>
-          </div>
+          <p class="row note" id="accountHint"></p>
         </div>
       </section>
 
@@ -79,6 +60,10 @@
           <div class="row">
             <label class="row-label" for="launchAtLogin" data-i18n="settings.openAtLogin">Open at login</label>
             <input type="checkbox" role="switch" class="switch" id="launchAtLogin" />
+          </div>
+          <div class="row" id="loginItemHint" hidden>
+            <span class="row-sub" data-i18n="settings.loginItemApproval">Allow Claude Bar in System Settings &gt; General &gt; Login Items</span>
+            <button class="btn" id="openLoginItemsBtn" data-i18n="settings.openSystemSettings">Open Settings</button>
           </div>
         </div>
       </section>

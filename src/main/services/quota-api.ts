@@ -1,5 +1,4 @@
 import { keychainService, Credentials } from './keychain'
-import { authService } from './auth'
 import { logger } from './logger'
 import { settingsStore, PersistedQuotaData } from './settings-store'
 import { t } from '../../shared/i18n'
@@ -21,11 +20,13 @@ export interface ExtraUsageData {
 }
 
 export interface UsageResponse {
-  five_hour: QuotaData
+  five_hour: QuotaData | null
   seven_day: QuotaData
-  seven_day_opus?: QuotaData
+  [key: string]: unknown
   extra_usage?: ExtraUsageData
 }
+
+const MODEL_FAMILIES = ['opus', 'sonnet', 'haiku', 'fable'] as const
 
 const MIN_FETCH_INTERVAL_MS = 290000 // ~5min between scheduled calls; slack absorbs request latency vs setInterval ticks
 const MIN_FORCE_INTERVAL_MS = 15000 // 15s absolute minimum even for manual refresh
@@ -34,7 +35,7 @@ const MIN_429_COOLDOWN_SEC = 120 // OAuth /usage returns retry-after: 0 which is
 function isValidQuota(q: unknown): q is QuotaData {
   if (!q || typeof q !== 'object') return false
   const qObj = q as Record<string, unknown>
-  return typeof qObj.utilization === 'number' && (typeof qObj.resets_at === 'string' || qObj.resets_at === null)
+  return typeof qObj.utilization === 'number' && Number.isFinite(qObj.utilization) && (typeof qObj.resets_at === 'string' || qObj.resets_at === null)
 }
 
 function isValidExtraUsage(e: unknown): e is ExtraUsageData {
@@ -47,7 +48,7 @@ function isValidExtraUsage(e: unknown): e is ExtraUsageData {
 export function isValidUsageResponse(data: unknown): data is UsageResponse {
   if (!data || typeof data !== 'object') return false
   const obj = data as Record<string, unknown>
-  return isValidQuota(obj.five_hour) && isValidQuota(obj.seven_day)
+  return (obj.five_hour === null || isValidQuota(obj.five_hour)) && isValidQuota(obj.seven_day)
 }
 
 export function formatTimeUntil(date: Date): string {
@@ -110,17 +111,16 @@ export class QuotaService {
     const lastQuota = settingsStore.get('lastQuotaData') as PersistedQuotaData | null
     if (lastQuota && Date.now() - lastQuota.fetchedAt < 24 * 60 * 60 * 1000) {
       this.cachedQuota = {
-        fiveHour: buildPeriod(lastQuota.fiveHour.utilization, new Date(lastQuota.fiveHour.resetsAt ?? NaN), 5),
+        fiveHour: lastQuota.fiveHour ? buildPeriod(lastQuota.fiveHour.utilization, new Date(lastQuota.fiveHour.resetsAt ?? NaN), 5) : undefined,
         sevenDay: buildPeriod(lastQuota.sevenDay.utilization, new Date(lastQuota.sevenDay.resetsAt ?? NaN), 7 * 24),
+        models: (lastQuota.models ?? (lastQuota.sevenDayOpus
+          ? [{ key: 'seven_day_opus', label: 'Opus', period: lastQuota.sevenDayOpus }] : [])).map(model => ({
+          ...model, period: buildPeriod(model.period.utilization, new Date(model.period.resetsAt ?? NaN), 7 * 24)
+        })),
         lastUpdated: new Date(lastQuota.fetchedAt)
       }
-      if (lastQuota.sevenDayOpus) {
-        this.cachedQuota.sevenDayOpus = buildPeriod(
-          lastQuota.sevenDayOpus.utilization, new Date(lastQuota.sevenDayOpus.resetsAt ?? NaN), 7 * 24
-        )
-      }
       this.lastFetchTime = lastQuota.fetchedAt
-      logger.info(`Restored persisted quota: 5h=${Math.round(lastQuota.fiveHour.utilization)}%, 7d=${Math.round(lastQuota.sevenDay.utilization)}% (${Math.round((Date.now() - lastQuota.fetchedAt) / 60000)}min ago)`)
+      logger.info(`Restored persisted quota: 5h=${Math.round(lastQuota.fiveHour?.utilization ?? 0)}%, 7d=${Math.round(lastQuota.sevenDay.utilization)}% (${Math.round((Date.now() - lastQuota.fetchedAt) / 60000)}min ago)`)
     }
   }
 
@@ -178,28 +178,10 @@ export class QuotaService {
   }
 
   /**
-   * Resolve credentials based on the configured authMode.
-   * - 'app': uses in-app OAuth tokens (authService)
-   * - 'cli': reads Claude Code's Keychain tokens (never refreshed here)
+   * Read Claude Code's Keychain tokens (never refreshed here).
    * Sets lastError when returning null.
    */
   private async getCredentials(): Promise<Credentials | null> {
-    if (settingsStore.get('authMode') === 'app') {
-      const accessToken = await authService.getValidAccessToken()
-      if (!accessToken) {
-        logger.error('No credentials available from in-app auth')
-        this.lastError = { type: 'auth', message: t('error.noCredentials'), retryable: false }
-        return null
-      }
-      const userInfo = authService.getUserInfo()
-      return {
-        accessToken,
-        emailAddress: userInfo?.email,
-        displayName: userInfo?.name,
-        subscriptionType: userInfo?.subscriptionType
-      }
-    }
-
     const credentials = await keychainService.getCredentials()
     if (!credentials) {
       logger.error('No credentials available in Keychain')
@@ -211,20 +193,19 @@ export class QuotaService {
       this.lastError = { type: 'auth', message: t('error.cliTokenExpired'), retryable: true }
       return null
     }
+    // Claude Code switched account: drop the previous account's data
+    const account = credentials.accountUuid ?? credentials.emailAddress ?? null
+    const knownAccount = settingsStore.get('lastAccount')
+    if (account && knownAccount && account !== knownAccount) {
+      logger.info('Claude Code account changed — resetting quota data')
+      this.resetForAccountChange()
+    }
+    if (account) settingsStore.set('lastAccount', account)
     return credentials
   }
 
-  /**
-   * Get fresh credentials after a 401.
-   * - 'app': refresh in-app tokens
-   * - 'cli': re-read the Keychain in case Claude Code rotated the token
-   */
+  // After a 401: re-read the Keychain in case Claude Code rotated the token
   private async refreshCredentials(current: Credentials): Promise<Credentials | null> {
-    if (settingsStore.get('authMode') === 'app') {
-      if (!(await authService.refreshTokens())) return null
-      return this.getCredentials()
-    }
-
     const latest = await keychainService.getCredentials()
     if (!latest || latest.accessToken === current.accessToken || keychainService.isTokenExpired(latest)) {
       return null
@@ -235,11 +216,11 @@ export class QuotaService {
   private async doApiFetch(): Promise<QuotaInfo | null> {
     // Throttle from the request start: a slow response must not make the next tick look too early
     const startedAt = Date.now()
-    const generation = this.accountGeneration
     try {
       const credentials = await this.getCredentials()
 
       if (!credentials) return null
+      const generation = this.accountGeneration
 
       const response = await this.fetchOnce(credentials)
       if (!response) return this.getCachedQuota()
@@ -256,16 +237,17 @@ export class QuotaService {
       if (generation !== this.accountGeneration) return null
 
       this.cachedQuota = {
-        fiveHour: buildPeriod(data.five_hour.utilization, new Date(data.five_hour.resets_at ?? NaN), 5),
+        fiveHour: data.five_hour ? buildPeriod(data.five_hour.utilization, new Date(data.five_hour.resets_at ?? NaN), 5) : undefined,
         sevenDay: buildPeriod(data.seven_day.utilization, new Date(data.seven_day.resets_at ?? NaN), 7 * 24),
+        // Per-model weekly windows only: the response also carries non-model ones (oauth_apps, routines, cowork)
+        models: MODEL_FAMILIES.flatMap((name) => {
+          const key = `seven_day_${name}`
+          const value = (data as unknown as Record<string, unknown>)[key]
+          if (!isValidQuota(value)) return []
+          const label = name[0].toUpperCase() + name.slice(1)
+          return [{ key, label, period: buildPeriod(value.utilization, new Date(value.resets_at ?? NaN), 7 * 24) }]
+        }),
         lastUpdated: new Date()
-      }
-
-      // Parse optional Opus weekly quota (Max plans)
-      if (isValidQuota(data.seven_day_opus)) {
-        this.cachedQuota.sevenDayOpus = buildPeriod(
-          data.seven_day_opus.utilization, new Date(data.seven_day_opus.resets_at ?? NaN), 7 * 24
-        )
       }
 
       // Parse optional extra usage / overage info
@@ -288,20 +270,20 @@ export class QuotaService {
 
       // Persist quota data for next startup
       const persistedData: PersistedQuotaData = {
-        fiveHour: { utilization: data.five_hour.utilization, resetsAt: data.five_hour.resets_at },
+        fiveHour: data.five_hour ? { utilization: data.five_hour.utilization, resetsAt: data.five_hour.resets_at } : undefined,
         sevenDay: { utilization: data.seven_day.utilization, resetsAt: data.seven_day.resets_at },
+        models: this.cachedQuota.models.map(model => ({
+          ...model, period: { utilization: model.period.utilization, resetsAt: Number.isFinite(model.period.resetsAt.getTime()) ? model.period.resetsAt.toISOString() : null }
+        })),
         fetchedAt: this.cachedQuota.lastUpdated.getTime()
-      }
-      if (isValidQuota(data.seven_day_opus)) {
-        persistedData.sevenDayOpus = { utilization: data.seven_day_opus.utilization, resetsAt: data.seven_day_opus.resets_at }
       }
       settingsStore.set('lastQuotaData', persistedData)
 
-      const { sevenDayOpus, extraUsage } = this.cachedQuota
-      const opusLog = sevenDayOpus ? `, opus=${Math.round(sevenDayOpus.utilization)}%` : ''
+      const { models, extraUsage } = this.cachedQuota
+      const modelsLog = models.map(model => `, ${model.label}=${Math.round(model.period.utilization)}%`).join('')
       const overageLog = extraUsage?.isEnabled ? `, overage=${(extraUsage.usedCredits / 100).toFixed(2)} ${extraUsage.currency}` : ''
       logger.info(
-        `Quota fetched (API): 5h=${Math.round(data.five_hour.utilization)}%, 7d=${Math.round(data.seven_day.utilization)}%${opusLog}${overageLog}`
+        `Quota fetched (API): 5h=${Math.round(data.five_hour?.utilization ?? 0)}%, 7d=${Math.round(data.seven_day.utilization)}%${modelsLog}${overageLog}`
       )
 
       return this.getCachedQuota()
@@ -313,7 +295,7 @@ export class QuotaService {
   }
 
   /**
-   * Single API call with one token-refresh retry on 401.
+   * Single API call with one Keychain re-read retry on 401.
    * No exponential backoff, no multi-retry loop.
    */
   private async fetchOnce(credentials: Credentials): Promise<Response | null> {
@@ -335,9 +317,9 @@ export class QuotaService {
         return response
       }
 
-      // On 401, try refreshing token once
+      // On 401, re-read the Keychain once
       if (response.status === 401) {
-        logger.warn('Authentication failed — attempting token refresh')
+        logger.warn('Authentication failed — re-reading Keychain')
         const refreshed = await this.refreshCredentials(credentials)
         if (refreshed) {
           response = await doRequest(refreshed)
@@ -346,8 +328,7 @@ export class QuotaService {
             return response
           }
         }
-        const cli = settingsStore.get('authMode') === 'cli'
-        this.lastError = { type: 'auth', message: t(cli ? 'error.cliTokenExpired' : 'error.sessionExpired'), retryable: cli }
+        this.lastError = { type: 'auth', message: t('error.cliTokenExpired'), retryable: true }
         return null
       }
 
@@ -427,7 +408,7 @@ export class QuotaService {
     return t('error.rateLimitRetrySec', { sec: remainingSec })
   }
 
-  // Forget everything tied to the previous account/auth source; the caller then forces a refresh
+  // Forget everything tied to the previous account
   resetForAccountChange(): void {
     this.accountGeneration++
     this.pendingFetch = null
@@ -436,22 +417,21 @@ export class QuotaService {
     this.lastError = null
     settingsStore.set('lastQuotaData', null)
     settingsStore.set('notifiedLevels', {})
+    settingsStore.set('resetNotifications', {})
   }
 
   getCachedQuota(): QuotaInfo | null {
     if (!this.cachedQuota) return null
     // Recalculate time-dependent fields on every read
-    const { fiveHour, sevenDay, sevenDayOpus } = this.cachedQuota
+    const { fiveHour, sevenDay, models } = this.cachedQuota
     const staleAfterMs = 2 * settingsStore.get('refreshInterval') * 1000
     const result: QuotaInfo = {
       ...this.cachedQuota,
       error: this.getLastError() ?? undefined,
       stale: Date.now() - this.cachedQuota.lastUpdated.getTime() > staleAfterMs,
-      fiveHour: buildPeriod(fiveHour.utilization, fiveHour.resetsAt, 5),
-      sevenDay: buildPeriod(sevenDay.utilization, sevenDay.resetsAt, 7 * 24)
-    }
-    if (sevenDayOpus) {
-      result.sevenDayOpus = buildPeriod(sevenDayOpus.utilization, sevenDayOpus.resetsAt, 7 * 24)
+      fiveHour: fiveHour ? buildPeriod(fiveHour.utilization, fiveHour.resetsAt, 5) : undefined,
+      sevenDay: buildPeriod(sevenDay.utilization, sevenDay.resetsAt, 7 * 24),
+      models: models.map(model => ({ ...model, period: buildPeriod(model.period.utilization, model.period.resetsAt, 7 * 24) }))
     }
     return result
   }
@@ -462,10 +442,8 @@ export class QuotaService {
       return 'normal'
     }
 
-    let maxUtilization = Math.max(quota.fiveHour.utilization, quota.sevenDay.utilization)
-    if (quota.sevenDayOpus) {
-      maxUtilization = Math.max(maxUtilization, quota.sevenDayOpus.utilization)
-    }
+    const maxUtilization = Math.max(quota.fiveHour?.utilization ?? 0, quota.sevenDay.utilization,
+      ...quota.models.map(model => model.period.utilization))
 
     return getQuotaLevel(maxUtilization)
   }

@@ -12,9 +12,6 @@ vi.mock('../src/main/services/logger', () => ({
 }))
 const keychain = { getCredentials: vi.fn(), isTokenExpired: vi.fn() }
 vi.mock('../src/main/services/keychain', () => ({ keychainService: keychain }))
-vi.mock('../src/main/services/auth', () => ({
-  authService: { getValidAccessToken: vi.fn(), refreshTokens: vi.fn(), getUserInfo: vi.fn() }
-}))
 
 const { QuotaService, isValidUsageResponse, formatTimeUntil, calculateResetProgress } = await import(
   '../src/main/services/quota-api'
@@ -31,7 +28,7 @@ const fetchMock = vi.fn()
 
 beforeEach(() => {
   for (const key of Object.keys(store)) delete store[key]
-  Object.assign(store, { authMode: 'cli', rateLimitedUntil: 0, lastQuotaData: null })
+  Object.assign(store, { rateLimitedUntil: 0, lastQuotaData: null })
   keychain.getCredentials.mockReset().mockResolvedValue({ accessToken: 'token-a' })
   keychain.isTokenExpired.mockReset().mockReturnValue(false)
   fetchMock.mockReset()
@@ -47,6 +44,13 @@ describe('pure helpers', () => {
   it('accepts null resets_at (no active session window)', () => {
     expect(isValidUsageResponse(usage({ five_hour: { utilization: 0, resets_at: null } }))).toBe(true)
     expect(isValidUsageResponse(usage({ five_hour: { resets_at: null } }))).toBe(false)
+  })
+
+  it('accepts an absent session but still requires a valid weekly quota', () => {
+    expect(isValidUsageResponse(usage({ five_hour: null }))).toBe(true)
+    expect(isValidUsageResponse(usage({ seven_day: null }))).toBe(false)
+    expect(isValidUsageResponse(usage({ five_hour: undefined }))).toBe(false)
+    expect(isValidUsageResponse(usage({ seven_day: { utilization: NaN, resets_at: null } }))).toBe(false)
   })
 
   it('formats time until reset', () => {
@@ -74,8 +78,59 @@ describe('QuotaService', () => {
   it('parses a response with null resets_at', async () => {
     fetchMock.mockResolvedValueOnce(json(usage({ five_hour: { utilization: 0, resets_at: null } })))
     const quota = await new QuotaService().fetchQuota(true)
-    expect(quota?.fiveHour.resetsIn).toBe('—')
+    expect(quota?.fiveHour?.resetsIn).toBe('—')
     expect(quota?.sevenDay.utilization).toBe(32)
+  })
+
+  it('persists and restores a null session without losing weekly data', async () => {
+    fetchMock.mockResolvedValueOnce(json(usage({ five_hour: null })))
+    const quota = await new QuotaService().fetchQuota(true)
+    expect(quota?.fiveHour).toBeUndefined()
+    expect(quota?.sevenDay.utilization).toBe(32)
+    expect(new QuotaService().getCachedQuota()?.fiveHour).toBeUndefined()
+    expect(new QuotaService().getCachedQuota()?.sevenDay.utilization).toBe(32)
+  })
+
+  it('parses, persists and restores every model while ignoring non-model keys', async () => {
+    const model = { utilization: 95, resets_at: new Date(Date.now() + 48 * HOUR).toISOString() }
+    fetchMock.mockResolvedValueOnce(json(usage({
+      seven_day_opus: { ...model, utilization: 20 }, seven_day_sonnet: model,
+      seven_day_routines: model, seven_day_oauth_apps: model, seven_day_cowork: model,
+      seven_day_bad: { utilization: '90', resets_at: null }, seven_day_empty: null
+    })))
+    const service = new QuotaService()
+    const quota = await service.fetchQuota(true)
+    expect(quota?.models.map(({ key, label }) => ({ key, label }))).toEqual([
+      { key: 'seven_day_opus', label: 'Opus' }, { key: 'seven_day_sonnet', label: 'Sonnet' }
+    ])
+    expect(service.getQuotaLevel()).toBe('critical')
+    expect(new QuotaService().getCachedQuota()?.models).toEqual(quota?.models)
+    expect(store.lastQuotaData).not.toHaveProperty('sevenDayOpus')
+  })
+
+  it('migrates an old persisted Opus quota', () => {
+    store.lastQuotaData = {
+      fiveHour: { utilization: 0, resetsAt: null },
+      sevenDay: { utilization: 10, resetsAt: new Date(Date.now() + 48 * HOUR).toISOString() },
+      sevenDayOpus: { utilization: 90, resetsAt: new Date(Date.now() + 48 * HOUR).toISOString() },
+      fetchedAt: Date.now()
+    }
+    const service = new QuotaService()
+    expect(service.getCachedQuota()?.models[0]).toMatchObject({
+      key: 'seven_day_opus', label: 'Opus', period: { utilization: 90 }
+    })
+    expect(service.getQuotaLevel()).toBe('critical')
+  })
+
+  it('updates time-dependent model fields and utilization after reset', async () => {
+    fetchMock.mockResolvedValueOnce(json(usage({ seven_day_sonnet: {
+      utilization: 90, resets_at: new Date(Date.now() + HOUR).toISOString()
+    } })))
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    vi.useFakeTimers({ now: Date.now() + 2 * HOUR })
+    expect(service.getCachedQuota()?.models[0].period.utilization).toBe(0)
+    expect(service.getQuotaLevel()).toBe('normal')
   })
 
   it('ignores extra_usage with an invalid currency', async () => {
@@ -109,7 +164,7 @@ describe('QuotaService', () => {
       .mockResolvedValueOnce({ accessToken: 'token-b' })
     fetchMock.mockResolvedValueOnce(json({}, 401)).mockResolvedValueOnce(json(usage()))
     const quota = await new QuotaService().fetchQuota(true)
-    expect(quota?.fiveHour.utilization).toBe(45)
+    expect(quota?.fiveHour?.utilization).toBe(45)
     expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe('Bearer token-b')
   })
 
@@ -143,6 +198,7 @@ describe('QuotaService', () => {
   it('resetForAccountChange() forgets cached and persisted quota and notified levels', async () => {
     fetchMock.mockResolvedValueOnce(json(usage()))
     store.notifiedLevels = { fiveHour: 'warning' }
+    store.resetNotifications = { fiveHour: { resetsAt: Date.now(), utilization: 75 } }
     const service = new QuotaService()
     await service.fetchQuota(true)
     expect(store.lastQuotaData).not.toBeNull()
@@ -150,6 +206,20 @@ describe('QuotaService', () => {
     expect(service.getCachedQuota()).toBeNull()
     expect(store.lastQuotaData).toBeNull()
     expect(store.notifiedLevels).toEqual({})
+    expect(store.resetNotifications).toEqual({})
+  })
+
+  it('resets the previous account data when the Keychain account changes', async () => {
+    fetchMock.mockImplementation(async () => json(usage()))
+    keychain.getCredentials.mockResolvedValue({ accessToken: 'token-a', accountUuid: 'acc-a' })
+    const service = new QuotaService()
+    await service.fetchQuota(true)
+    store.notifiedLevels = { fiveHour: 'warning' }
+    keychain.getCredentials.mockResolvedValue({ accessToken: 'token-b', accountUuid: 'acc-b' })
+    vi.useFakeTimers({ now: Date.now() + 20_000 })
+    expect(await service.fetchQuota(true)).not.toBeNull()
+    expect(store.notifiedLevels).toEqual({})
+    expect(store.lastAccount).toBe('acc-b')
   })
 
   it('drops a response that lands after an account change', async () => {
@@ -171,7 +241,7 @@ describe('QuotaService', () => {
     await service.fetchQuota(true)
     vi.useFakeTimers({ now: Date.now() + 3 * HOUR })
     const quota = service.getCachedQuota()
-    expect(quota?.fiveHour.utilization).toBe(0)
+    expect(quota?.fiveHour?.utilization).toBe(0)
     expect(quota?.sevenDay.utilization).toBe(32)
     expect(quota?.stale).toBe(true)
   })

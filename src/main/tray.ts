@@ -1,5 +1,4 @@
 import { Tray, Menu, nativeImage, app } from 'electron'
-import { join } from 'path'
 import { quotaService } from './services/quota-api'
 import { schedulerService } from './services/scheduler'
 import { updaterService } from './services/updater'
@@ -8,6 +7,7 @@ import { windowManager } from './windows'
 import { settingsStore } from './services/settings-store'
 import { notificationService } from './services/notifications'
 import { t, getLocale } from '../shared/i18n'
+import { renderGaugeBitmap } from './tray-icon'
 
 type DisplayMode = 'standard' | 'detailed' | 'compact' | 'minimal' | 'time-remaining'
 
@@ -18,30 +18,27 @@ export class TrayManager {
   private minuteTimer: NodeJS.Timeout | null = null
   private lastNotifiedFetch = Date.now() // restored data predates this: notify only after a real fetch
 
-  private getIconPath(type: 'normal' | 'warning' | 'critical' = 'normal'): string {
-    const basePath = app.isPackaged
-      ? join(process.resourcesPath, 'assets')
-      : join(__dirname, '../../assets')
-
-    switch (type) {
-      case 'warning':
-        return join(basePath, 'icon-warning.png')
-      case 'critical':
-        return join(basePath, 'icon-critical.png')
-      default:
-        return join(basePath, 'iconTemplate.png')
-    }
+  private createIcon(): Electron.NativeImage {
+    const quota = quotaService.getCachedQuota()
+    const fiveHour = quota?.fiveHour?.utilization ?? null
+    const sevenDay = quota?.sevenDay.utilization ?? null
+    const dimmed = this.needsAttention()
+    const image = nativeImage.createFromBitmap(renderGaugeBitmap(fiveHour, sevenDay, 1, dimmed), {
+      width: 18, height: 18, scaleFactor: 1
+    })
+    image.addRepresentation({
+      scaleFactor: 2, width: 36, height: 36,
+      buffer: renderGaugeBitmap(fiveHour, sevenDay, 2, dimmed)
+    })
+    image.setTemplateImage(true)
+    return image
   }
 
   create(callbacks: { onShowPopup: () => void; onShowSettings: () => void }): void {
     this.onShowPopup = callbacks.onShowPopup
     this.onShowSettings = callbacks.onShowSettings
 
-    const iconPath = this.getIconPath()
-    const icon = nativeImage.createFromPath(iconPath)
-    icon.setTemplateImage(true)
-
-    this.tray = new Tray(icon)
+    this.tray = new Tray(this.createIcon(), '18f3a40d-d04b-4b87-972e-79bd0432eed3')
     this.refreshDisplay()
     this.syncMinuteTimer()
 
@@ -112,71 +109,48 @@ export class TrayManager {
   // Errors other than rate limits (cached data is still valid then), or data too old to trust
   private needsAttention(): boolean {
     const lastError = quotaService.getLastError()
-    return (!!lastError && lastError.type !== 'rate_limit') || !!quotaService.getCachedQuota()?.stale
+    const quota = quotaService.getCachedQuota()
+    return (!!lastError && (lastError.type !== 'rate_limit' || !quota)) || !!quota?.stale
   }
 
   updateTitle(): void {
     if (!this.tray) return
 
-    const lastError = quotaService.getLastError()
-    const hasError = !!lastError && lastError.type !== 'rate_limit'
     const quota = quotaService.getCachedQuota()
     if (!quota) {
-      if (hasError) {
-        this.tray.setTitle(`\u26a0 ${t(lastError.type === 'auth' ? 'tray.login' : 'tray.error')}`)
-      } else {
-        this.tray.setTitle('-- / --')
-      }
+      this.tray.setTitle('', { fontType: 'monospacedDigit' })
       return
     }
 
-    const fiveHour = Math.round(quota.fiveHour.utilization)
+    const fiveHour = quota.fiveHour ? `${Math.round(quota.fiveHour.utilization)}%` : '—'
     const sevenDay = Math.round(quota.sevenDay.utilization)
-    const opus = quota.sevenDayOpus ? Math.round(quota.sevenDayOpus.utilization) : null
     let title: string
 
     switch (this.getDisplayMode()) {
       case 'detailed':
-        title = opus !== null
-          ? t('tray.detailedOpusFmt', { five: fiveHour, seven: sevenDay, opus })
-          : t('tray.detailedFmt', { five: fiveHour, seven: sevenDay })
+        title = [t('tray.detailedFmt', { five: fiveHour, seven: sevenDay }),
+          ...quota.models.map(model => `${model.label}: ${Math.round(model.period.utilization)}%`)].join(' | ')
         break
       case 'compact':
-        title = `${fiveHour}%`
+        title = fiveHour
         break
       case 'minimal':
         title = ''
         break
       case 'time-remaining':
-        title = quota.fiveHour.resetsIn
+        title = quota.fiveHour?.resetsIn ?? '—'
         break
       default: // standard
-        title = `${fiveHour}% / ${sevenDay}%`
+        title = `${fiveHour} / ${sevenDay}%`
     }
 
-    // Flag errors and stale data so an expired session doesn't hide behind old numbers
-    this.tray.setTitle(this.needsAttention() ? `\u26a0 ${title}`.trim() : title)
+    this.tray.setTitle(title, { fontType: 'monospacedDigit' })
   }
 
   updateIcon(): void {
     if (!this.tray) return
 
-    if (this.needsAttention()) {
-      const iconPath = this.getIconPath('warning')
-      const icon = nativeImage.createFromPath(iconPath)
-      this.tray.setImage(icon)
-      return
-    }
-
-    const level = quotaService.getQuotaLevel()
-    const iconPath = this.getIconPath(level)
-    const icon = nativeImage.createFromPath(iconPath)
-
-    if (level === 'normal') {
-      icon.setTemplateImage(true)
-    }
-
-    this.tray.setImage(icon)
+    this.tray.setImage(this.createIcon())
   }
 
   updateTooltip(): void {
@@ -193,14 +167,15 @@ export class TrayManager {
       return
     }
 
-    const fiveHour = Math.round(quota.fiveHour.utilization)
     const sevenDay = Math.round(quota.sevenDay.utilization)
     const lines = [
-      t('tray.session', { pct: fiveHour, resets: quota.fiveHour.resetsIn }),
+      quota.fiveHour
+        ? t('tray.session', { pct: Math.round(quota.fiveHour.utilization), resets: quota.fiveHour.resetsIn })
+        : t('popup.noSession'),
       t('tray.weekly', { pct: sevenDay, resets: quota.sevenDay.resetsIn })
     ]
-    if (quota.sevenDayOpus) {
-      lines.push(t('tray.opus', { pct: Math.round(quota.sevenDayOpus.utilization), resets: quota.sevenDayOpus.resetsIn }))
+    for (const model of quota.models) {
+      lines.push(t('tray.model', { label: model.label, pct: Math.round(model.period.utilization), resets: model.period.resetsIn }))
     }
     lines.push(t('tray.updated', { time: quota.lastUpdated.toLocaleTimeString(getLocale()) }))
     if (quota.error && quota.error.type !== 'rate_limit') {

@@ -20,10 +20,16 @@ export interface ExtraUsageInfo {
   currency: string
 }
 
+export interface ModelQuota {
+  key: string
+  label: string
+  period: QuotaPeriod
+}
+
 export interface QuotaInfo {
-  fiveHour: QuotaPeriod
+  fiveHour?: QuotaPeriod
   sevenDay: QuotaPeriod
-  sevenDayOpus?: QuotaPeriod
+  models: ModelQuota[]
   extraUsage?: ExtraUsageInfo
   lastUpdated: Date
   error?: QuotaError

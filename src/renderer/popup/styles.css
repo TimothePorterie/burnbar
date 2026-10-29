@@ -7,6 +7,8 @@ body {
 }
 
 .popup {
+  max-height: 600px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -320,3 +322,26 @@ body {
   opacity: 1;
   transform: translate(-50%, 0);
 }
+
+#modelQuotas {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.quota-forecast {
+  color: var(--warn);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.pace-badge {
+  align-self: flex-start;
+  color: var(--ok);
+  font-size: var(--fs-xs);
+}
+
+.pace-badge[data-pace='hot'] { color: var(--crit); }
+.pace-badge[data-pace='on-track'] { color: var(--warn); }
+.footer-actions { display: flex; gap: var(--sp-1); }
+.link.quit { color: var(--ink-2); }

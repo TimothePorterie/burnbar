@@ -102,35 +102,6 @@ h2 {
   background: var(--ok);
 }
 
-.auth-code {
-  flex-direction: column;
-  align-items: stretch;
-  gap: var(--sp-2);
-}
-
-.auth-code-input {
-  display: flex;
-  gap: var(--sp-2);
-}
-
-.auth-code-input input {
-  flex: 1;
-  min-width: 0;
-  height: 24px;
-  padding: 0 var(--sp-2);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
-  background: var(--surface);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: var(--fs-sm);
-  user-select: text;
-}
-
-.auth-error {
-  color: var(--crit);
-  font-size: var(--fs-sm);
-}
-
 /* Controls */
 select {
   height: 24px;

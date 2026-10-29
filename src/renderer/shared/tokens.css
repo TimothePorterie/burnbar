@@ -135,3 +135,22 @@ code {
     transition: none !important;
   }
 }
+
+@media (prefers-contrast: more) {
+  :root {
+    --ink-2: var(--ink);
+    --ink-3: var(--ink);
+    --hairline: currentColor;
+  }
+  .meter { border: 1px solid var(--ink-2); }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root { --surface: #fff; }
+  html, body { background: #F5F3EF; }
+}
+
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  :root { --surface: #292826; }
+  html, body { background: #1F1E1D; }
+}

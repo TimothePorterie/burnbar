@@ -8,13 +8,6 @@
   "files": [
     "dist/**/*"
   ],
-  "extraResources": [
-    {
-      "from": "assets",
-      "to": "assets",
-      "filter": ["**/*"]
-    }
-  ],
   "asar": true,
   "electronFuses": {
     "runAsNode": false,

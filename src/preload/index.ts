@@ -5,7 +5,7 @@ export type { QuotaErrorType, QuotaError, QuotaPeriod, ExtraUsageInfo, QuotaInfo
 export interface Settings {
   refreshInterval: number
   launchAtLogin: boolean
-  authMode: 'app' | 'cli'
+  launchAtLoginStatus?: 'not-registered' | 'enabled' | 'requires-approval' | 'not-found'
   enableNotifications: boolean
   language: 'en' | 'fr'
 }
@@ -45,8 +45,7 @@ const api = {
     ipcRenderer.invoke('set-refresh-interval', seconds),
   setLaunchAtLogin: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('set-launch-at-login', enabled),
-  setAuthMode: (mode: 'app' | 'cli'): Promise<boolean> =>
-    ipcRenderer.invoke('set-auth-mode', mode),
+  openLoginItemsSettings: (): Promise<boolean> => ipcRenderer.invoke('open-login-items-settings'),
   setEnableNotifications: (enabled: boolean): Promise<boolean> =>
     ipcRenderer.invoke('set-enable-notifications', enabled),
   setLanguage: (lang: string): Promise<boolean> =>
@@ -55,18 +54,6 @@ const api = {
     const handler = (_event: Electron.IpcRendererEvent, lang: 'en' | 'fr'): void => callback(lang)
     ipcRenderer.on('language-changed', handler)
     return () => ipcRenderer.removeListener('language-changed', handler)
-  },
-
-  // Auth
-  startLogin: (): Promise<boolean> => ipcRenderer.invoke('auth-start-login'),
-  submitAuthCode: (code: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('auth-submit-code', code),
-  logout: (): Promise<boolean> => ipcRenderer.invoke('auth-logout'),
-  getAuthState: (): Promise<string> => ipcRenderer.invoke('auth-get-state'),
-  onAuthStateChanged: (callback: (state: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, state: string): void => callback(state)
-    ipcRenderer.on('auth-state-changed', handler)
-    return () => ipcRenderer.removeListener('auth-state-changed', handler)
   },
 
   // Updates
@@ -88,7 +75,9 @@ const api = {
   // Window
   reportContentHeight: (height: number): void => {
     ipcRenderer.send('popup-content-height', height)
-  }
+  },
+
+  quitApp: (): Promise<void> => ipcRenderer.invoke('quit-app')
 }
 
 contextBridge.exposeInMainWorld('claudeBar', api)

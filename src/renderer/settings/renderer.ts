@@ -6,19 +6,13 @@ import { t, setLocale, applyI18n } from '../../shared/i18n'
 const statusIndicator = document.getElementById('statusIndicator') as HTMLElement
 const statusText = document.getElementById('statusText') as HTMLElement
 const statusEmail = document.getElementById('statusEmail') as HTMLElement
-const logoutBtn = document.getElementById('logoutBtn') as HTMLButtonElement
-const loginBtn = document.getElementById('loginBtn') as HTMLButtonElement
-const cliHint = document.getElementById('cliHint') as HTMLElement
-const authCodeSection = document.getElementById('authCodeSection') as HTMLElement
-const authCodeInput = document.getElementById('authCodeInput') as HTMLInputElement
-const validateBtn = document.getElementById('validateBtn') as HTMLButtonElement
-const cancelLoginBtn = document.getElementById('cancelLoginBtn') as HTMLButtonElement
-const authError = document.getElementById('authError') as HTMLElement
+const refreshAccountBtn = document.getElementById('refreshAccountBtn') as HTMLButtonElement
+const accountHint = document.getElementById('accountHint') as HTMLElement
 const language = document.getElementById('language') as HTMLSelectElement
 const enableNotifications = document.getElementById('enableNotifications') as HTMLInputElement
 const launchAtLogin = document.getElementById('launchAtLogin') as HTMLInputElement
-
-let authMode: 'app' | 'cli' = 'app'
+const loginItemHint = document.getElementById('loginItemHint') as HTMLElement
+const openLoginItemsBtn = document.getElementById('openLoginItemsBtn') as HTMLButtonElement
 
 const ARROW_STEPS: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
 
@@ -64,20 +58,17 @@ function showAccount(connected: boolean, detail: string): void {
   statusIndicator.classList.toggle('connected', connected)
   statusText.textContent = t(connected ? 'settings.connected' : 'settings.notConnected')
   statusEmail.textContent = detail
-  // CLI credentials belong to Claude Code — login/logout happen there
-  logoutBtn.hidden = !connected || authMode === 'cli'
-  loginBtn.hidden = connected || authMode === 'cli' || !authCodeSection.hidden
-  cliHint.hidden = authMode !== 'cli'
 }
 
 async function loadConnectionStatus(): Promise<void> {
   try {
     if (await window.claudeBar.hasCredentials()) {
-      authCodeSection.hidden = true
       const userInfo = await window.claudeBar.getUserInfo()
-      showAccount(true, userInfo?.email || userInfo?.name || '')
+      const plan = userInfo?.subscriptionType
+      const planLabel = plan && plan.charAt(0).toUpperCase() + plan.slice(1)
+      showAccount(true, [userInfo?.email || userInfo?.name, planLabel].filter(Boolean).join(' · '))
     } else {
-      showAccount(false, authMode === 'cli' ? '' : t('settings.noCredentials'))
+      showAccount(false, '')
     }
   } catch (error) {
     console.error('Failed to load connection status:', error)
@@ -89,7 +80,7 @@ function applyLocale(lang: Locale): void {
   setLocale(lang)
   applyI18n()
   language.value = lang
-  setRichText(cliHint, t('settings.cliModeHint'))
+  setRichText(accountHint, t('settings.accountHint'))
   loadConnectionStatus()
   loadUpdateInfo()
 }
@@ -105,15 +96,10 @@ language.addEventListener('change', async () => {
   }
 })
 
-const selectAuthMode = segmented(document.getElementById('authMode')!, async (value) => {
-  authMode = value as 'app' | 'cli'
-  authCodeSection.hidden = true
-  try {
-    await window.claudeBar.setAuthMode(authMode)
-  } catch (error) {
-    console.error('Failed to update auth mode:', error)
-  }
+refreshAccountBtn.addEventListener('click', async () => {
+  refreshAccountBtn.disabled = true
   await loadConnectionStatus()
+  refreshAccountBtn.disabled = false
 })
 
 const selectRefreshInterval = segmented(document.getElementById('refreshInterval')!, async (value) => {
@@ -138,76 +124,25 @@ launchAtLogin.addEventListener('change', async () => {
   } catch (error) {
     console.error('Failed to update launch at login:', error)
   }
+  await loadLoginItemStatus()
 })
 
-// Auth event listeners
-loginBtn.addEventListener('click', async () => {
-  loginBtn.disabled = true
+openLoginItemsBtn.addEventListener('click', () => void window.claudeBar.openLoginItemsSettings())
+
+// Re-check when the user comes back: login item approval, or a Claude Code login in the meantime
+window.addEventListener('focus', () => {
+  void loadLoginItemStatus()
+  void loadConnectionStatus()
+})
+
+async function loadLoginItemStatus(): Promise<void> {
   try {
-    if (await window.claudeBar.startLogin()) {
-      loginBtn.hidden = true
-      authCodeSection.hidden = false
-      authCodeInput.value = ''
-      authError.hidden = true
-      authCodeInput.focus()
-    }
+    const settings = await window.claudeBar.getSettings()
+    loginItemHint.hidden = settings.launchAtLoginStatus !== 'requires-approval'
   } catch (error) {
-    console.error('Failed to start login:', error)
-  } finally {
-    loginBtn.disabled = false
+    console.error('Failed to load login item status:', error)
   }
-})
-
-validateBtn.addEventListener('click', async () => {
-  const code = authCodeInput.value.trim()
-  if (!code) return
-
-  validateBtn.disabled = true
-  authError.hidden = true
-
-  try {
-    const result = await window.claudeBar.submitAuthCode(code)
-    if (result.success) {
-      await loadConnectionStatus()
-    } else {
-      authError.textContent = result.error || t('error.authFailed')
-      authError.hidden = false
-    }
-  } catch (error) {
-    console.error('Failed to submit auth code:', error)
-    authError.textContent = t('error.unexpected')
-    authError.hidden = false
-  } finally {
-    validateBtn.disabled = false
-  }
-})
-
-authCodeInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    validateBtn.click()
-  }
-})
-
-cancelLoginBtn.addEventListener('click', () => {
-  authCodeSection.hidden = true
-  loginBtn.hidden = false
-})
-
-logoutBtn.addEventListener('click', async () => {
-  try {
-    await window.claudeBar.logout()
-    await loadConnectionStatus()
-  } catch (error) {
-    console.error('Failed to logout:', error)
-  }
-})
-
-// Listen for auth state changes
-window.claudeBar.onAuthStateChanged(async (state) => {
-  if (state === 'authenticated' || state === 'unauthenticated') {
-    await loadConnectionStatus()
-  }
-})
+}
 
 // Update UI elements
 const updateText = document.getElementById('updateText') as HTMLElement
@@ -309,11 +244,10 @@ window.claudeBar.onLanguageChanged(applyLocale)
 // Initialize locale then load
 async function init(): Promise<void> {
   const settings = await window.claudeBar.getSettings()
-  authMode = settings.authMode
-  selectAuthMode(settings.authMode)
   selectRefreshInterval(settings.refreshInterval.toString())
   enableNotifications.checked = settings.enableNotifications
   launchAtLogin.checked = settings.launchAtLogin
+  loginItemHint.hidden = settings.launchAtLoginStatus !== 'requires-approval'
   applyLocale(settings.language as Locale)
 }
 
